@@ -1,36 +1,57 @@
-package com.example.fypdraft
+package com.example.fypdraft.view
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+//import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
+//import androidx.compose.ui.Alignment
+//import androidx.compose.ui.Modifier
+//import androidx.compose.ui.graphics.Brush
+//import androidx.compose.ui.graphics.Color
+//import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.fypdraft.ui.theme.FYPDraftTheme
 
+//package com.example.fypdraft.ui.screens
+
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.fypdraft.model.AuthViewModel
+import kotlinx.coroutines.delay
+
 @Composable
 fun ResetPWScreen(
     modifier: Modifier = Modifier,
-    onConfirmReset: (emailOrUsername: String, newPassword: String) -> Unit = { _, _ -> },
+    viewModel: AuthViewModel,
+    onResetSuccess: () -> Unit = {},
     onBack: () -> Unit = {}
 ) {
-    var emailOrUsername by remember { mutableStateOf("") }
-    var newPassword by remember { mutableStateOf("") }
-    var passwordVisible by remember { mutableStateOf(false) }
+    var email by remember { mutableStateOf("") }
+
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
+        uiState.errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearMessages()
+        }
+        uiState.successMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearMessages()
+            // After showing success message, navigate back to login
+            delay(2000)
+            onResetSuccess()
+        }
+    }
 
     val bgBrush = Brush.verticalGradient(
         colors = listOf(
@@ -52,11 +73,10 @@ fun ResetPWScreen(
                 .padding(top = 200.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Card containing the form
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 280.dp),
+                    .heightIn(min = 220.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = Color(0xD1FFF9F4)
                 ),
@@ -75,45 +95,33 @@ fun ResetPWScreen(
                         color = Color.Black
                     )
 
-                    Spacer(Modifier.height(30.dp))
+                    Spacer(Modifier.height(10.dp))
 
-                    OutlinedTextField(
-                        value = emailOrUsername,
-                        onValueChange = { emailOrUsername = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Email or Username") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
+                    Text(
+                        text = "Enter your email to receive a\npassword reset link",
+                        fontSize = 13.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.fillMaxWidth()
                     )
 
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(24.dp))
 
                     OutlinedTextField(
-                        value = newPassword,
-                        onValueChange = { newPassword = it },
+                        value = email,
+                        onValueChange = { email = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("New Password") },
+                        placeholder = { Text("Email") },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Icon(
-                                    imageVector = if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                    contentDescription = if (passwordVisible) "Hide password" else "Show password"
-                                )
-                            }
-                        }
+                        enabled = !uiState.isLoading
                     )
                 }
             }
 
             Spacer(Modifier.height(80.dp))
 
-            // Confirm Reset button
             Button(
-                onClick = { onConfirmReset(emailOrUsername, newPassword) },
+                onClick = { viewModel.resetPassword(email) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
@@ -121,14 +129,21 @@ fun ResetPWScreen(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF7B7B7B),
                     contentColor = Color.White
-                )
+                ),
+                enabled = !uiState.isLoading
             ) {
-                Text("Confirm Reset", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                if (uiState.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = Color.White
+                    )
+                } else {
+                    Text("Send Reset Link", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
             Spacer(Modifier.height(16.dp))
 
-            // Back button
             Button(
                 onClick = onBack,
                 modifier = Modifier
@@ -138,19 +153,24 @@ fun ResetPWScreen(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF7B7B7B),
                     contentColor = Color.White
-                )
+                ),
+                enabled = !uiState.isLoading
             ) {
                 Text("Back", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 }
-
-
-@Preview(showBackground = true)
-@Composable
-fun PreviewResetPWScreen() {
-    FYPDraftTheme {
-        ResetPWScreen()
-    }
-}
+//
+//@Preview(showBackground = true)
+//@Composable
+//fun PreviewResetPWScreen() {
+//    FYPDraftTheme {
+//        ResetPWScreen()
+//    }
+//}
