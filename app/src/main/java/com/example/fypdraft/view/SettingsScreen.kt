@@ -1,4 +1,4 @@
-package com.example.fypdraft
+package com.example.fypdraft.view
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
