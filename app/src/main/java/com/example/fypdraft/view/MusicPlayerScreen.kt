@@ -241,12 +241,12 @@ fun MusicPlayerScreen(
                                 override fun onReady(player: YouTubePlayer) {
                                     youtubePlayer = player
                                     isYouTubeReady = true
+
+                                    // Load and auto-play the video
                                     player.loadVideo(playerState.youtubeVideoId!!, 0f)
-                                    if (playerState.isPlaying) {
-                                        player.play()
-                                    } else {
-                                        player.pause()
-                                    }
+
+                                    // Ensure volume is on
+                                    player.setVolume(100)
                                 }
 
                                 override fun onStateChange(
