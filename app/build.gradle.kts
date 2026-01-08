@@ -117,6 +117,7 @@ dependencies {
 
     // YouTube Android Player
     implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.0")
+    implementation("androidx.webkit:webkit:1.8.0")
 
     // OkHttp for API calls
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
