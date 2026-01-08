@@ -115,4 +115,10 @@ dependencies {
     // Connect Spotify Repo to Music Player
     implementation("io.coil-kt:coil-compose:2.6.0")
 
+    // YouTube Android Player
+    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.0")
+
+    // OkHttp for API calls
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 }
