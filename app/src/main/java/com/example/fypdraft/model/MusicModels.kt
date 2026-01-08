@@ -19,12 +19,13 @@ data class Playlist(
     val imageUrl: String?
 )
 
-data class PlayerState(
-    val currentTrack: Track? = null,
-    val isPlaying: Boolean = false,
-    val progress: Float = 0f, // 0f to 1f
-    val currentPosition: Long = 0L,
-    val duration: Long = 0L,
-    val playlist: List<Track> = emptyList(),
-    val currentIndex: Int = 0
-)
+//declared in musicplayerviewmodel.kt
+//data class PlayerState(
+//    val currentTrack: Track? = null,
+//    val isPlaying: Boolean = false,
+//    val progress: Float = 0f, // 0f to 1f
+//    val currentPosition: Long = 0L,
+//    val duration: Long = 0L,
+//    val playlist: List<Track> = emptyList(),
+//    val currentIndex: Int = 0
+//)

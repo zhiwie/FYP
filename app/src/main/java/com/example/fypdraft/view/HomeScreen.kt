@@ -19,41 +19,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.fypdraft.model.Track as MusicTrack
+import coil.compose.AsyncImage
+import com.example.fypdraft.data.repository.DeezerRepository
 import com.example.fypdraft.model.MusicPlayerViewModel
-
-// Mock data classes
-data class Song(
-    val title: String,
-    val artist: String,
-    val color: Color
-)
+import com.example.fypdraft.model.Track
+import kotlinx.coroutines.launch
 
 data class MoodPlaylist(
     val title: String,
-    val subtitle: String
+    val subtitle: String,
+    val searchQuery: String
 )
-
-// Convert Song to MusicTrack
-fun Song.toMusicTrack(): MusicTrack {
-    val mockPreviewUrls = mapOf(
-        "Lover" to "https://p.scdn.co/mp3-preview/6e1f4a9a4b1f4e7b8c3d5e6f7a8b9c0d1e2f3a4b",
-        "Blinding Lights" to "https://p.scdn.co/mp3-preview/7b9b8e8f9e0f1e2f3e4f5e6f7e8f9e0f1e2f3e4f"
-    )
-
-    return MusicTrack(
-        id = this.title.hashCode().toString(),
-        name = this.title,
-        artist = this.artist,
-        album = "Album",
-        albumArtUrl = "https://via.placeholder.com/300/${this.color.value.toString(16).substring(2)}/FFFFFF?text=${this.title.replace(" ", "+")}",
-        previewUrl = mockPreviewUrls[this.title],
-        durationMs = 30000
-    )
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,29 +49,57 @@ fun HomeScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
 
-    // Sample data
-    val similarEnergySongs = remember {
-        listOf(
-            Song("Lover", "Taylor Swift", Color(0xFFFFB3D9)),
-            Song("特别的人", "方大同", Color(0xFF4A9B9B)),
-            Song("兰亭序", "周杰伦", Color(0xFFD4A574)),
-            Song("me me she", "Radwimps", Color(0xFF87CEEB)),
-            Song("What You...", "CORTIS", Color(0xFFB8B8B8)),
-            Song("Maze (迷宮)", "ktsj.jpt", Color(0xFF6495ED)),
-            Song("Blinding Lights", "The Weeknd", Color(0xFFFF8C00)),
-            Song("Shivers", "Ed Sheeran", Color(0xFFFFD700)),
-            Song("BIRDS OF...", "Billie Eilish", Color(0xFF4682B4)),
-            Song("月牙湾", "飞儿乐团", Color(0xFF9370DB))
-        )
+    // Deezer integration
+    val deezerRepository = remember { DeezerRepository() }
+    val scope = rememberCoroutineScope()
+
+    // Real music data from Deezer
+    var topTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var similarEnergyTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var liftUpMoodTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var searchResults by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var isSearching by remember { mutableStateOf(false) }
+
+    // Load music on first composition
+    LaunchedEffect(Unit) {
+        scope.launch {
+            try {
+                isLoading = true
+
+                // Load top tracks
+                topTracks = deezerRepository.getTopTracks().take(10)
+
+                // Load mood-based playlists
+                similarEnergyTracks = deezerRepository.getPlaylistByMood("energetic").take(10)
+                liftUpMoodTracks = deezerRepository.getPlaylistByMood("happy").take(10)
+
+                isLoading = false
+            } catch (e: Exception) {
+                isLoading = false
+                // Handle error silently or show error message
+            }
+        }
     }
 
-    val liftUpMoodSongs = similarEnergySongs
+    // Handle search
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.length >= 3) {
+            scope.launch {
+                isSearching = true
+                searchResults = deezerRepository.searchTracks(searchQuery).take(20)
+                isSearching = false
+            }
+        } else {
+            searchResults = emptyList()
+        }
+    }
 
     val moodPlaylists = remember {
         listOf(
-            MoodPlaylist("Late Night", "Grooves"),
-            MoodPlaylist("High Energy", "Replay"),
-            MoodPlaylist("Replay &", "refresh")
+            MoodPlaylist("Late Night", "Grooves", "late night chill"),
+            MoodPlaylist("High Energy", "Workout", "high energy workout"),
+            MoodPlaylist("Peaceful", "Relax", "peaceful calm")
         )
     }
 
@@ -113,9 +121,7 @@ fun HomeScreen(
                 )
 
                 // Bottom Navigation
-                NavigationBar(
-                    containerColor = Color.White
-                ) {
+                NavigationBar(containerColor = Color.White) {
                     NavigationBarItem(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
@@ -138,7 +144,7 @@ fun HomeScreen(
                             onNavigateToSpotify()
                         },
                         icon = { Icon(Icons.Filled.Link, "Connect") },
-                        label = { Text("Spotify") }
+                        label = { Text("Music") }
                     )
                     NavigationBarItem(
                         selected = selectedTab == 3,
@@ -174,13 +180,25 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp),
-                    placeholder = { Text("Search Anything", color = Color.Gray) },
+                    placeholder = { Text("Search songs, artists...", color = Color.Gray) },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Filled.Search,
                             contentDescription = "Search",
                             tint = Color.Gray
                         )
+                    },
+                    trailingIcon = {
+                        if (isSearching) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Filled.Close, "Clear", tint = Color.Gray)
+                            }
+                        }
                     },
                     shape = RoundedCornerShape(28.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -194,82 +212,152 @@ fun HomeScreen(
 
                 Spacer(Modifier.height(20.dp))
 
+                // Show search results if searching
+                if (searchResults.isNotEmpty()) {
+                    Text(
+                        text = "Search Results",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(searchResults) { track ->
+                            TrackCard(
+                                track = track,
+                                allTracks = searchResults,
+                                musicPlayerViewModel = musicPlayerViewModel,
+                                onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
+                }
+
                 // Mood Equaliser Card
                 MoodEqualiserCard()
 
                 Spacer(Modifier.height(24.dp))
 
-                Text(
-                    text = "Playlist Recommendation",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                Text(
-                    text = "Similar Energy",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.Black
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(similarEnergySongs) { song ->
-                        SongCard(
-                            song = song,
-                            allSongs = similarEnergySongs,
-                            musicPlayerViewModel = musicPlayerViewModel,
-                            onNavigateToMusicPlayer = onNavigateToMusicPlayer
-                        )
+                // Show loading indicator
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator()
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Loading music...",
+                                color = Color.Gray,
+                                fontSize = 14.sp
+                            )
+                        }
                     }
-                }
+                } else {
+                    // Playlist Recommendations
+                    Text(
+                        text = "Playlist Recommendation",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
 
-                Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(12.dp))
 
-                Text(
-                    text = "Lift Up Your Mood",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.Black
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(liftUpMoodSongs) { song ->
-                        SongCard(
-                            song = song,
-                            allSongs = liftUpMoodSongs,
-                            musicPlayerViewModel = musicPlayerViewModel,
-                            onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                    // Similar Energy
+                    if (similarEnergyTracks.isNotEmpty()) {
+                        Text(
+                            text = "Similar Energy",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.Black
                         )
+                        Spacer(Modifier.height(12.dp))
+
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(similarEnergyTracks) { track ->
+                                TrackCard(
+                                    track = track,
+                                    allTracks = similarEnergyTracks,
+                                    musicPlayerViewModel = musicPlayerViewModel,
+                                    onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(24.dp))
                     }
-                }
 
-                Spacer(Modifier.height(24.dp))
+                    // Lift Up Your Mood
+                    if (liftUpMoodTracks.isNotEmpty()) {
+                        Text(
+                            text = "Lift Up Your Mood",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.Black
+                        )
+                        Spacer(Modifier.height(12.dp))
 
-                Text(
-                    text = "Mix Based on Your Mood",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.Black
-                )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(liftUpMoodTracks) { track ->
+                                TrackCard(
+                                    track = track,
+                                    allTracks = liftUpMoodTracks,
+                                    musicPlayerViewModel = musicPlayerViewModel,
+                                    onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(24.dp))
+                    }
 
-                Spacer(Modifier.height(12.dp))
+                    // Top Tracks
+                    if (topTracks.isNotEmpty()) {
+                        Text(
+                            text = "Top Tracks Right Now",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.Black
+                        )
+                        Spacer(Modifier.height(12.dp))
 
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    items(moodPlaylists) { playlist ->
-                        MoodPlaylistCard(playlist)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(topTracks) { track ->
+                                TrackCard(
+                                    track = track,
+                                    allTracks = topTracks,
+                                    musicPlayerViewModel = musicPlayerViewModel,
+                                    onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(24.dp))
+                    }
+
+                    // Mix Based on Your Mood
+                    Text(
+                        text = "Mix Based on Your Mood",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.Black
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(moodPlaylists) { playlist ->
+                            MoodPlaylistCard(
+                                playlist = playlist,
+                                deezerRepository = deezerRepository,
+                                musicPlayerViewModel = musicPlayerViewModel,
+                                onNavigateToMusicPlayer = onNavigateToMusicPlayer,
+                                scope = scope
+                            )
+                        }
                     }
                 }
 
@@ -299,15 +387,60 @@ fun HomeScreen(
 }
 
 @Composable
+fun TrackCard(
+    track: Track,
+    allTracks: List<Track>,
+    musicPlayerViewModel: MusicPlayerViewModel?,
+    onNavigateToMusicPlayer: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(140.dp)
+            .clickable {
+                musicPlayerViewModel?.loadTrack(track, allTracks)
+                musicPlayerViewModel?.play()
+                onNavigateToMusicPlayer()
+            }
+    ) {
+        Card(
+            modifier = Modifier.size(140.dp),
+            shape = RoundedCornerShape(12.dp),
+            elevation = CardDefaults.cardElevation(4.dp)
+        ) {
+            AsyncImage(
+                model = track.albumArtUrl,
+                contentDescription = track.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                placeholder = null,
+                error = null
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = track.name,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.Black,
+            maxLines = 2
+        )
+        Text(
+            text = track.artist,
+            fontSize = 11.sp,
+            color = Color.Gray,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
 fun MoodEqualiserCard() {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .height(280.dp)
-            .clickable { /* TODO: Open mood equaliser */ },
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFFF5F5F5)
-        ),
+            .clickable { /* TODO */ },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5)),
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(
@@ -327,7 +460,7 @@ fun MoodEqualiserCard() {
                     color = Color.Black
                 )
                 IconButton(
-                    onClick = { /* TODO: Refresh recommendations */ },
+                    onClick = { /* TODO */ },
                     modifier = Modifier
                         .size(32.dp)
                         .border(1.dp, Color.Black, RoundedCornerShape(8.dp))
@@ -340,9 +473,7 @@ fun MoodEqualiserCard() {
                     )
                 }
             }
-
             Spacer(Modifier.height(20.dp))
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -350,7 +481,7 @@ fun MoodEqualiserCard() {
                 contentAlignment = Alignment.CenterStart
             ) {
                 Text(
-                    text = "🐧",
+                    text = "🎵",
                     fontSize = 80.sp,
                     modifier = Modifier.padding(start = 120.dp, top = 20.dp)
                 )
@@ -362,47 +493,6 @@ fun MoodEqualiserCard() {
                 )
             }
         }
-    }
-}
-
-@Composable
-fun SongCard(
-    song: Song,
-    allSongs: List<Song>,
-    musicPlayerViewModel: MusicPlayerViewModel?,
-    onNavigateToMusicPlayer: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .width(100.dp)
-            .clickable {
-                val track = song.toMusicTrack()
-                val playlist = allSongs.map { it.toMusicTrack() }
-                musicPlayerViewModel?.loadTrack(track, playlist)
-                musicPlayerViewModel?.play()
-                onNavigateToMusicPlayer()
-            }
-    ) {
-        Box(
-            modifier = Modifier
-                .size(100.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(song.color)
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = song.title,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = Color.Black,
-            maxLines = 1
-        )
-        Text(
-            text = song.artist,
-            fontSize = 11.sp,
-            color = Color.Gray,
-            maxLines = 1
-        )
     }
 }
 
@@ -421,9 +511,7 @@ fun MiniMusicPlayer(
             .height(64.dp)
             .padding(horizontal = 8.dp)
             .clickable { onNavigateToMusicPlayer() },
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFFE8E8E8)
-        ),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFE8E8E8)),
         shape = RoundedCornerShape(12.dp)
     ) {
         Row(
@@ -432,13 +520,29 @@ fun MiniMusicPlayer(
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF6495ED))
-            )
+            // Album art
+            Card(
+                modifier = Modifier.size(40.dp),
+                shape = RoundedCornerShape(6.dp)
+            ) {
+                if (currentTrack != null) {
+                    AsyncImage(
+                        model = currentTrack.albumArtUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF6495ED))
+                    )
+                }
+            }
+
             Spacer(Modifier.width(12.dp))
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = currentTrack?.name ?: "No track playing",
@@ -454,6 +558,7 @@ fun MiniMusicPlayer(
                     maxLines = 1
                 )
             }
+
             IconButton(onClick = {
                 musicPlayerViewModel?.togglePlayPause()
             }) {
@@ -468,11 +573,30 @@ fun MiniMusicPlayer(
 }
 
 @Composable
-fun MoodPlaylistCard(playlist: MoodPlaylist) {
+fun MoodPlaylistCard(
+    playlist: MoodPlaylist,
+    deezerRepository: DeezerRepository,
+    musicPlayerViewModel: MusicPlayerViewModel?,
+    onNavigateToMusicPlayer: () -> Unit,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    var isLoading by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .width(120.dp)
-            .clickable { /* TODO: Open playlist */ },
+            .clickable {
+                scope.launch {
+                    isLoading = true
+                    val tracks = deezerRepository.searchTracks(playlist.searchQuery).take(20)
+                    if (tracks.isNotEmpty()) {
+                        musicPlayerViewModel?.loadTrack(tracks.first(), tracks)
+                        musicPlayerViewModel?.play()
+                        onNavigateToMusicPlayer()
+                    }
+                    isLoading = false
+                }
+            },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
@@ -482,12 +606,19 @@ fun MoodPlaylistCard(playlist: MoodPlaylist) {
                 .background(Color(0xFF696969)),
             contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-            )
+            if (isLoading) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.size(30.dp)
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(
