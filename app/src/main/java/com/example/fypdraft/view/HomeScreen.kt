@@ -2,33 +2,6 @@ package com.example.fypdraft.view
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-//import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-//import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-//import androidx.compose.ui.Alignment
-//import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-//import androidx.compose.ui.graphics.Brush
-//import androidx.compose.ui.graphics.Color
-//import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.fypdraft.ui.theme.FYPDraftTheme
-
-//package com.example.fypdraft.ui.screens
-
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -49,7 +22,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.fypdraft.model.Track as MusicTrack
+import com.example.fypdraft.model.MusicPlayerViewModel
 
+// Mock data classes
 data class Song(
     val title: String,
     val artist: String,
@@ -61,39 +37,63 @@ data class MoodPlaylist(
     val subtitle: String
 )
 
+// Convert Song to MusicTrack
+fun Song.toMusicTrack(): MusicTrack {
+    val mockPreviewUrls = mapOf(
+        "Lover" to "https://p.scdn.co/mp3-preview/6e1f4a9a4b1f4e7b8c3d5e6f7a8b9c0d1e2f3a4b",
+        "Blinding Lights" to "https://p.scdn.co/mp3-preview/7b9b8e8f9e0f1e2f3e4f5e6f7e8f9e0f1e2f3e4f"
+    )
+
+    return MusicTrack(
+        id = this.title.hashCode().toString(),
+        name = this.title,
+        artist = this.artist,
+        album = "Album",
+        albumArtUrl = "https://via.placeholder.com/300/${this.color.value.toString(16).substring(2)}/FFFFFF?text=${this.title.replace(" ", "+")}",
+        previewUrl = mockPreviewUrls[this.title],
+        durationMs = 30000
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     modifier: Modifier = Modifier,
+    musicPlayerViewModel: MusicPlayerViewModel? = null,
     onNavigateToLibrary: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
     onNavigateToSpotify: () -> Unit = {},
+    onNavigateToMusicPlayer: () -> Unit = {},
     onSignOut: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
 
     // Sample data
-    val similarEnergySongs = listOf(
-        Song("Lover", "Taylor Swift", Color(0xFFFFB3D9)),
-        Song("特别的人", "方大同", Color(0xFF4A9B9B)),
-        Song("兰亭序", "周杰伦", Color(0xFFD4A574)),
-        Song("me me she", "Radwimps", Color(0xFF87CEEB)),
-        Song("What You...", "CORTIS", Color(0xFFB8B8B8)),
-        Song("Maze (迷宮)", "ktsj.jpt", Color(0xFF6495ED)),
-        Song("Blinding Lights", "The Weeknd", Color(0xFFFF8C00)),
-        Song("Shivers", "Ed Sheeran", Color(0xFFFFD700)),
-        Song("BIRDS OF...", "Billie Eilish", Color(0xFF4682B4)),
-        Song("月牙湾", "飞儿乐团", Color(0xFF9370DB))
-    )
+    val similarEnergySongs = remember {
+        listOf(
+            Song("Lover", "Taylor Swift", Color(0xFFFFB3D9)),
+            Song("特别的人", "方大同", Color(0xFF4A9B9B)),
+            Song("兰亭序", "周杰伦", Color(0xFFD4A574)),
+            Song("me me she", "Radwimps", Color(0xFF87CEEB)),
+            Song("What You...", "CORTIS", Color(0xFFB8B8B8)),
+            Song("Maze (迷宮)", "ktsj.jpt", Color(0xFF6495ED)),
+            Song("Blinding Lights", "The Weeknd", Color(0xFFFF8C00)),
+            Song("Shivers", "Ed Sheeran", Color(0xFFFFD700)),
+            Song("BIRDS OF...", "Billie Eilish", Color(0xFF4682B4)),
+            Song("月牙湾", "飞儿乐团", Color(0xFF9370DB))
+        )
+    }
 
     val liftUpMoodSongs = similarEnergySongs
 
-    val moodPlaylists = listOf(
-        MoodPlaylist("Late Night", "Grooves"),
-        MoodPlaylist("High Energy", "Replay"),
-        MoodPlaylist("Replay &", "refresh")
-    )
+    val moodPlaylists = remember {
+        listOf(
+            MoodPlaylist("Late Night", "Grooves"),
+            MoodPlaylist("High Energy", "Replay"),
+            MoodPlaylist("Replay &", "refresh")
+        )
+    }
 
     val bgBrush = Brush.verticalGradient(
         colors = listOf(
@@ -107,51 +107,10 @@ fun HomeScreen(
         bottomBar = {
             Column {
                 // Mini Music Player
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(64.dp)
-                        .padding(horizontal = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFE8E8E8)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color(0xFF6495ED))
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Now Playing",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color.Black
-                            )
-                            Text(
-                                text = "Tap to expand",
-                                fontSize = 11.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        IconButton(onClick = { /* Play/Pause */ }) {
-                            Icon(
-                                imageVector = Icons.Filled.PlayArrow,
-                                contentDescription = "Play",
-                                tint = Color.Black
-                            )
-                        }
-                    }
-                }
+                MiniMusicPlayer(
+                    musicPlayerViewModel = musicPlayerViewModel,
+                    onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                )
 
                 // Bottom Navigation
                 NavigationBar(
@@ -236,69 +195,7 @@ fun HomeScreen(
                 Spacer(Modifier.height(20.dp))
 
                 // Mood Equaliser Card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(280.dp)
-                        .clickable { /* TODO: Open mood equaliser */ },
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFF5F5F5)
-                    ),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Mood Equaliser",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black
-                            )
-                            IconButton(
-                                onClick = { /* TODO: Refresh recommendations */ },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .border(1.dp, Color.Black, RoundedCornerShape(8.dp))
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Refresh,
-                                    contentDescription = "Refresh",
-                                    tint = Color.Black,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(20.dp))
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            Text(
-                                text = "🐧",
-                                fontSize = 80.sp,
-                                modifier = Modifier.padding(start = 120.dp, top = 20.dp)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .width(200.dp)
-                                    .height(2.dp)
-                                    .background(Color(0xFF6495ED))
-                            )
-                        }
-                    }
-                }
+                MoodEqualiserCard()
 
                 Spacer(Modifier.height(24.dp))
 
@@ -324,7 +221,12 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(similarEnergySongs) { song ->
-                        SongCard(song)
+                        SongCard(
+                            song = song,
+                            allSongs = similarEnergySongs,
+                            musicPlayerViewModel = musicPlayerViewModel,
+                            onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                        )
                     }
                 }
 
@@ -343,7 +245,12 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(liftUpMoodSongs) { song ->
-                        SongCard(song)
+                        SongCard(
+                            song = song,
+                            allSongs = liftUpMoodSongs,
+                            musicPlayerViewModel = musicPlayerViewModel,
+                            onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                        )
                     }
                 }
 
@@ -392,11 +299,89 @@ fun HomeScreen(
 }
 
 @Composable
-fun SongCard(song: Song) {
+fun MoodEqualiserCard() {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(280.dp)
+            .clickable { /* TODO: Open mood equaliser */ },
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFF5F5F5)
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Mood Equaliser",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black
+                )
+                IconButton(
+                    onClick = { /* TODO: Refresh recommendations */ },
+                    modifier = Modifier
+                        .size(32.dp)
+                        .border(1.dp, Color.Black, RoundedCornerShape(8.dp))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Refresh",
+                        tint = Color.Black,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Text(
+                    text = "🐧",
+                    fontSize = 80.sp,
+                    modifier = Modifier.padding(start = 120.dp, top = 20.dp)
+                )
+                Box(
+                    modifier = Modifier
+                        .width(200.dp)
+                        .height(2.dp)
+                        .background(Color(0xFF6495ED))
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SongCard(
+    song: Song,
+    allSongs: List<Song>,
+    musicPlayerViewModel: MusicPlayerViewModel?,
+    onNavigateToMusicPlayer: () -> Unit
+) {
     Column(
         modifier = Modifier
             .width(100.dp)
-            .clickable { /* TODO: Play song */ }
+            .clickable {
+                val track = song.toMusicTrack()
+                val playlist = allSongs.map { it.toMusicTrack() }
+                musicPlayerViewModel?.loadTrack(track, playlist)
+                musicPlayerViewModel?.play()
+                onNavigateToMusicPlayer()
+            }
     ) {
         Box(
             modifier = Modifier
@@ -418,6 +403,67 @@ fun SongCard(song: Song) {
             color = Color.Gray,
             maxLines = 1
         )
+    }
+}
+
+@Composable
+fun MiniMusicPlayer(
+    musicPlayerViewModel: MusicPlayerViewModel?,
+    onNavigateToMusicPlayer: () -> Unit
+) {
+    val playerState = musicPlayerViewModel?.playerState?.collectAsState()
+    val currentTrack = playerState?.value?.currentTrack
+    val isPlaying = playerState?.value?.isPlaying ?: false
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .padding(horizontal = 8.dp)
+            .clickable { onNavigateToMusicPlayer() },
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFE8E8E8)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF6495ED))
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = currentTrack?.name ?: "No track playing",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.Black,
+                    maxLines = 1
+                )
+                Text(
+                    text = currentTrack?.artist ?: "Tap a song to play",
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                    maxLines = 1
+                )
+            }
+            IconButton(onClick = {
+                musicPlayerViewModel?.togglePlayPause()
+            }) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    tint = Color.Black
+                )
+            }
+        }
     }
 }
 
@@ -456,13 +502,5 @@ fun MoodPlaylistCard(playlist: MoodPlaylist) {
             fontWeight = FontWeight.SemiBold,
             color = Color.Black
         )
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun PreviewHomeScreen() {
-    FYPDraftTheme {
-        HomeScreen()
     }
 }

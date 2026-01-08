@@ -40,6 +40,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MoodSyncApp(spotifyViewModel: SpotifyViewModel) {
     val authViewModel: AuthViewModel = viewModel()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val musicPlayerViewModel = remember { com.example.fypdraft.model.MusicPlayerViewModel(context) }
 
     var currentScreen by remember {
         mutableStateOf(
@@ -97,6 +99,7 @@ fun MoodSyncApp(spotifyViewModel: SpotifyViewModel) {
 
         "home" -> {
             HomeScreen(
+                musicPlayerViewModel = musicPlayerViewModel,
                 onNavigateToLibrary = {
                     // TODO: Navigate to library
                 },
@@ -105,6 +108,9 @@ fun MoodSyncApp(spotifyViewModel: SpotifyViewModel) {
                 },
                 onNavigateToSpotify = {
                     currentScreen = "spotify"
+                },
+                onNavigateToMusicPlayer = {
+                    currentScreen = "musicplayer"
                 },
                 onSignOut = {
                     authViewModel.signOut()
@@ -128,6 +134,15 @@ fun MoodSyncApp(spotifyViewModel: SpotifyViewModel) {
         "spotify" -> {
             SpotifyConnectionScreen(
                 spotifyViewModel = spotifyViewModel,
+                onBack = {
+                    currentScreen = "home"
+                }
+            )
+        }
+
+        "musicplayer" -> {
+            MusicPlayerScreen(
+                viewModel = musicPlayerViewModel,
                 onBack = {
                     currentScreen = "home"
                 }

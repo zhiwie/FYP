@@ -100,4 +100,37 @@ class SpotifyRepository(private val context: Context) {
             MockTrack("Peaches", "Justin Bieber", "Justice")
         )
     }
+
+    // Get mock tracks for demo (will be replaced with real Spotify data)
+    fun getMockTracksForPlayer(): List<com.example.fypdraft.model.Track> {
+        return listOf(
+            com.example.fypdraft.model.Track(
+                id = "1",
+                name = "Lover",
+                artist = "Taylor Swift",
+                album = "Lover",
+                albumArtUrl = "https://i.scdn.co/image/ab67616d0000b273e787cffec20aa2a396a61647",
+                previewUrl = "https://p.scdn.co/mp3-preview/6e1f4a9a4b1f4e7b8c3d5e6f7a8b9c0d1e2f3a4b",
+                durationMs = 30000
+            ),
+            com.example.fypdraft.model.Track(
+                id = "2",
+                name = "Blinding Lights",
+                artist = "The Weeknd",
+                album = "After Hours",
+                albumArtUrl = "https://i.scdn.co/image/ab67616d0000b2738863bc11d2aa12b54f5aeb36",
+                previewUrl = "https://p.scdn.co/mp3-preview/7b9b8e8f9e0f1e2f3e4f5e6f7e8f9e0f1e2f3e4f",
+                durationMs = 30000
+            ),
+            com.example.fypdraft.model.Track(
+                id = "3",
+                name = "Levitating",
+                artist = "Dua Lipa",
+                album = "Future Nostalgia",
+                albumArtUrl = "https://i.scdn.co/image/ab67616d0000b273fc92f0e8c72ba8d87ec2eb6e",
+                previewUrl = "https://p.scdn.co/mp3-preview/8c8d9e0f1e2f3e4f5e6f7e8f9e0f1e2f3e4f5e6f",
+                durationMs = 30000
+            )
+        )
+    }
 }
