@@ -116,7 +116,7 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.6.0")
 
     // YouTube Android Player
-    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.0")
+//    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.0")
     implementation("androidx.webkit:webkit:1.8.0")
 
     // OkHttp for API calls

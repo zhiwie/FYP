@@ -1,19 +1,15 @@
 package com.example.fypdraft.model
 
 import android.content.Context
+import android.media.MediaPlayer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fypdraft.data.repository.YouTubeMusicRepository
-import com.example.fypdraft.data.repository.MusicPlayerRepository
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-// Enhanced PlayerState with YouTube support
 data class PlayerState(
     val currentTrack: Track? = null,
     val isPlaying: Boolean = false,
@@ -22,46 +18,32 @@ data class PlayerState(
     val duration: Long = 0L,
     val playlist: List<Track> = emptyList(),
     val currentIndex: Int = 0,
-    val youtubeVideoId: String? = null,  // NEW: YouTube video ID
-    val isLoadingVideo: Boolean = false   // NEW: Loading state
+    val youtubeVideoId: String? = null,
+    val isLoadingVideo: Boolean = false,
+    val usingDeezerFallback: Boolean = false // NEW
 )
 
 class MusicPlayerViewModel(context: Context) : ViewModel() {
 
-    private val repository = MusicPlayerRepository(context)
     private val youtubeRepository = YouTubeMusicRepository()
+    private var mediaPlayer: MediaPlayer? = null
 
-    // Use custom PlayerState instead of repository's state
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
-
-    private var progressJob: Job? = null
-
-    init {
-        startProgressTracking()
-        // Observe repository state changes
-        observeRepositoryState()
-    }
-
-    private fun observeRepositoryState() {
-        viewModelScope.launch {
-            repository.playerState.collect { repoState ->
-                // Sync with repository state but keep YouTube fields
-                _playerState.value = _playerState.value.copy(
-                    isPlaying = repoState.isPlaying,
-                    progress = repoState.progress,
-                    currentPosition = repoState.currentPosition,
-                    duration = repoState.duration
-                )
-            }
-        }
-    }
 
     fun loadTrack(track: Track, playlist: List<Track> = emptyList()) {
         val finalPlaylist = if (playlist.isEmpty()) listOf(track) else playlist
         val currentIndex = finalPlaylist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
 
-        // Update state immediately
+        // Debug logging
+        android.util.Log.d("MusicPlayer", "Loading track: ${track.name} by ${track.artist}")
+        android.util.Log.d("MusicPlayer", "Track preview URL: ${track.previewUrl}")
+        android.util.Log.d("MusicPlayer", "Preview URL is ${if (track.previewUrl.isNullOrEmpty()) "EMPTY" else "VALID"}")
+
+        // Release previous media player if using Deezer
+        mediaPlayer?.release()
+        mediaPlayer = null
+
         _playerState.value = PlayerState(
             currentTrack = track,
             isPlaying = false,
@@ -71,44 +53,128 @@ class MusicPlayerViewModel(context: Context) : ViewModel() {
             isLoadingVideo = true
         )
 
-        // Load into repository for preview playback (if available)
-        repository.loadTrack(track, finalPlaylist)
-
-        // Load YouTube video ID for full playback
+        // Try to load YouTube video ID
         viewModelScope.launch {
             val videoId = youtubeRepository.getYouTubeVideoId(track)
             _playerState.value = _playerState.value.copy(
                 youtubeVideoId = videoId,
-                isLoadingVideo = false
+                isLoadingVideo = false,
+                usingDeezerFallback = videoId == null // Use Deezer if no YouTube found
+            )
+
+            // If no YouTube video, start Deezer preview automatically
+            if (videoId == null && !track.previewUrl.isNullOrEmpty()) {
+                android.util.Log.d("MusicPlayer", "No YouTube found, auto-starting Deezer preview")
+                playDeezerPreview(track.previewUrl)
+            }
+        }
+    }
+
+    fun useDeezerFallback() {
+        val currentTrack = _playerState.value.currentTrack
+        android.util.Log.d("MusicPlayer", "Attempting Deezer fallback for: ${currentTrack?.name}")
+        android.util.Log.d("MusicPlayer", "Preview URL: ${currentTrack?.previewUrl}")
+
+        if (currentTrack != null && !currentTrack.previewUrl.isNullOrEmpty()) {
+            _playerState.value = _playerState.value.copy(
+                usingDeezerFallback = true,
+                youtubeVideoId = null
+            )
+            playDeezerPreview(currentTrack.previewUrl)
+        } else {
+            android.util.Log.e("MusicPlayer", "No preview URL available for fallback")
+            _playerState.value = _playerState.value.copy(
+                usingDeezerFallback = false,
+                youtubeVideoId = null
+            )
+        }
+    }
+
+    private fun playDeezerPreview(previewUrl: String) {
+        try {
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .build()
+                )
+
+                setDataSource(previewUrl)
+
+                setOnPreparedListener {
+                    start()
+                    _playerState.value = _playerState.value.copy(
+                        isPlaying = true,
+                        duration = duration.toLong()
+                    )
+                }
+
+                setOnErrorListener { mp, what, extra ->
+                    android.util.Log.e("MusicPlayer", "MediaPlayer error: what=$what, extra=$extra")
+                    _playerState.value = _playerState.value.copy(
+                        isPlaying = false,
+                        usingDeezerFallback = false
+                    )
+                    true
+                }
+
+                setOnCompletionListener {
+                    playNext()
+                }
+
+                prepareAsync()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MusicPlayer", "Error playing Deezer preview", e)
+            _playerState.value = _playerState.value.copy(
+                isPlaying = false,
+                usingDeezerFallback = false
             )
         }
     }
 
     fun togglePlayPause() {
-        repository.togglePlayPause()
-        _playerState.value = _playerState.value.copy(
-            isPlaying = !_playerState.value.isPlaying
-        )
+        val currentState = _playerState.value
+
+        if (currentState.usingDeezerFallback) {
+            // Control MediaPlayer
+            mediaPlayer?.let { player ->
+                if (currentState.isPlaying) {
+                    player.pause()
+                    _playerState.value = currentState.copy(isPlaying = false)
+                } else {
+                    player.start()
+                    _playerState.value = currentState.copy(isPlaying = true)
+                }
+            }
+        } else {
+            // YouTube player is controlled by WebView
+            _playerState.value = currentState.copy(
+                isPlaying = !currentState.isPlaying
+            )
+        }
     }
 
     fun play() {
-        repository.play()
-        _playerState.value = _playerState.value.copy(isPlaying = true)
+        val currentState = _playerState.value
+
+        if (currentState.usingDeezerFallback) {
+            mediaPlayer?.start()
+        }
+
+        _playerState.value = currentState.copy(isPlaying = true)
     }
 
     fun pause() {
-        repository.pause()
-        _playerState.value = _playerState.value.copy(isPlaying = false)
-    }
+        val currentState = _playerState.value
 
-    fun seekTo(progress: Float) {
-        val duration = playerState.value.duration
-        val position = (duration * progress).toLong()
-        repository.seekTo(position)
-        _playerState.value = _playerState.value.copy(
-            currentPosition = position,
-            progress = progress
-        )
+        if (currentState.usingDeezerFallback) {
+            mediaPlayer?.pause()
+        }
+
+        _playerState.value = currentState.copy(isPlaying = false)
     }
 
     fun playNext() {
@@ -116,8 +182,7 @@ class MusicPlayerViewModel(context: Context) : ViewModel() {
         val nextIndex = currentState.currentIndex + 1
 
         if (nextIndex < currentState.playlist.size) {
-            val nextTrack = currentState.playlist[nextIndex]
-            loadTrack(nextTrack, currentState.playlist)
+            loadTrack(currentState.playlist[nextIndex], currentState.playlist)
             play()
         }
     }
@@ -127,35 +192,23 @@ class MusicPlayerViewModel(context: Context) : ViewModel() {
         val previousIndex = currentState.currentIndex - 1
 
         if (previousIndex >= 0) {
-            val previousTrack = currentState.playlist[previousIndex]
-            loadTrack(previousTrack, currentState.playlist)
+            loadTrack(currentState.playlist[previousIndex], currentState.playlist)
             play()
         }
     }
 
-    private fun startProgressTracking() {
-        progressJob?.cancel()
-        progressJob = viewModelScope.launch {
-            while (isActive) {
-                if (playerState.value.isPlaying) {
-                    val currentPos = repository.getCurrentPosition()
-                    val duration = playerState.value.duration
-                    if (duration > 0) {
-                        val progress = currentPos.toFloat() / duration.toFloat()
-                        _playerState.value = _playerState.value.copy(
-                            currentPosition = currentPos,
-                            progress = progress
-                        )
-                    }
-                }
-                delay(100) // Update every 100ms
-            }
+    fun seekTo(progress: Float) {
+        mediaPlayer?.let { player ->
+            val duration = player.duration
+            val position = (duration * progress).toInt()
+            player.seekTo(position)
+            _playerState.value = _playerState.value.copy(progress = progress)
         }
     }
 
     override fun onCleared() {
         super.onCleared()
-        progressJob?.cancel()
-        repository.release()
+        mediaPlayer?.release()
+        mediaPlayer = null
     }
 }

@@ -15,7 +15,7 @@ data class DeezerTrack(
     val id: Long,
     val title: String,
     val duration: Int,
-    val preview: String,
+    val preview: String, // 30-second preview URL
     val artist: DeezerArtist,
     val album: DeezerAlbum,
     val link: String
@@ -69,7 +69,7 @@ fun DeezerTrack.toAppTrack(): com.example.fypdraft.model.Track {
         artist = this.artist.name,
         album = this.album.title,
         albumArtUrl = this.album.coverXl ?: this.album.coverBig ?: this.album.coverMedium ?: "",
-        previewUrl = null, // We'll use YouTube instead
+        previewUrl = this.preview,
         durationMs = this.duration * 1000L,
         spotifyUri = null
     )

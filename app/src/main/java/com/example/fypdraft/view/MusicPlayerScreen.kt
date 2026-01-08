@@ -1,5 +1,8 @@
 package com.example.fypdraft.view
 
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,9 +24,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.example.fypdraft.model.MusicPlayerViewModel
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.YouTubePlayer
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.listeners.AbstractYouTubePlayerListener
-import com.pierfrancescosoffritti.androidyoutubeplayer.core.player.views.YouTubePlayerView
 
 @Composable
 fun MusicPlayerScreen(
@@ -49,30 +49,47 @@ fun MusicPlayerScreen(
         return
     }
 
-    // YouTube player state
-    var youtubePlayerView by remember { mutableStateOf<YouTubePlayerView?>(null) }
-    var youtubePlayer by remember { mutableStateOf<YouTubePlayer?>(null) }
-    var isYouTubeReady by remember { mutableStateOf(false) }
+    // WebView state
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    var isPlayerReady by remember { mutableStateOf(false) }
+    var playerError by remember { mutableStateOf<String?>(null) }
 
-    // Lifecycle management for YouTube player
+    // Reset player state when track changes
+    LaunchedEffect(playerState.youtubeVideoId) {
+        isPlayerReady = false
+        playerError = null
+    }
+
+    // Lifecycle management
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_PAUSE -> youtubePlayer?.pause()
-                Lifecycle.Event.ON_DESTROY -> youtubePlayerView?.release()
+                Lifecycle.Event.ON_PAUSE -> {
+                    webView?.evaluateJavascript("if(window.player) window.player.pauseVideo();", null)
+                }
+                Lifecycle.Event.ON_DESTROY -> {
+                    webView?.destroy()
+                }
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            youtubePlayerView?.release()
+            webView?.destroy()
         }
     }
 
-    // Check if we have YouTube video or should use preview
-    val hasYouTubeVideo = playerState.youtubeVideoId != null
-    val hasPreview = !currentTrack.previewUrl.isNullOrEmpty()
+    // Handle play/pause state changes
+    LaunchedEffect(playerState.isPlaying, isPlayerReady) {
+        if (isPlayerReady && webView != null) {
+            if (playerState.isPlaying) {
+                webView?.evaluateJavascript("if(window.player) window.player.playVideo();", null)
+            } else {
+                webView?.evaluateJavascript("if(window.player) window.player.pauseVideo();", null)
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -117,7 +134,7 @@ fun MusicPlayerScreen(
                     fontWeight = FontWeight.SemiBold
                 )
 
-                IconButton(onClick = { /* TODO: More options */ }) {
+                IconButton(onClick = { /* More options */ }) {
                     Icon(
                         imageVector = Icons.Default.MoreVert,
                         contentDescription = "More",
@@ -166,143 +183,277 @@ fun MusicPlayerScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Status indicator
-            if (playerState.isLoadingVideo) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "Loading full track...",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp
-                    )
-                }
-            } else if (hasYouTubeVideo) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = Color.Green,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "Full track ready",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp
-                    )
-                }
-            } else if (!hasPreview) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color.Yellow.copy(alpha = 0.2f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+            when {
+                playerState.isLoadingVideo -> {
                     Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = Color.Yellow
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "Could not load track",
-                            color = Color.White,
+                            text = "Finding song on YouTube...",
+                            color = Color.White.copy(alpha = 0.7f),
                             fontSize = 12.sp
                         )
+                    }
+                }
+                playerState.usingDeezerFallback -> {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.Blue.copy(alpha = 0.2f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = Color.Cyan
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Playing 30s preview from Deezer",
+                                color = Color.White,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+                playerError != null -> {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.Yellow.copy(alpha = 0.2f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color.Yellow
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "$playerError - using preview",
+                                color = Color.White,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+                playerState.youtubeVideoId != null && isPlayerReady -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color.Green,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Playing full track from YouTube",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                playerState.youtubeVideoId != null -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Loading YouTube player...",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                else -> {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.Yellow.copy(alpha = 0.2f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = Color.Yellow
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Track not available",
+                                color = Color.White,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // YouTube Player (hidden but playing audio)
-            if (hasYouTubeVideo && !playerState.isLoadingVideo) {
-                AndroidView(
-                    factory = { context ->
-                        YouTubePlayerView(context).apply {
-                            youtubePlayerView = this
-                            lifecycleOwner.lifecycle.addObserver(this)
-
-                            addYouTubePlayerListener(object : AbstractYouTubePlayerListener() {
-                                override fun onReady(player: YouTubePlayer) {
-                                    youtubePlayer = player
-                                    isYouTubeReady = true
-
-                                    // Load and auto-play the video
-                                    player.loadVideo(playerState.youtubeVideoId!!, 0f)
-
-                                    // Ensure volume is on
-                                    player.setVolume(100)
+            // Audio Player - Try YouTube first, fallback to Deezer preview
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (playerState.youtubeVideoId != null) 200.dp else 0.dp)
+            ) {
+                if (playerState.youtubeVideoId != null && !playerState.isLoadingVideo) {
+                    // Try YouTube embed
+                    AndroidView(
+                        factory = { context ->
+                            WebView(context).apply {
+                                webView = this
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    mediaPlaybackRequiresUserGesture = false
+                                    allowFileAccess = true
+                                    allowContentAccess = true
                                 }
 
-                                override fun onStateChange(
-                                    player: YouTubePlayer,
-                                    state: com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants.PlayerState
-                                ) {
-                                    // Handle video end
-                                    if (state == com.pierfrancescosoffritti.androidyoutubeplayer.core.player.PlayerConstants.PlayerState.ENDED) {
-                                        viewModel.playNext()
+                                webChromeClient = WebChromeClient()
+                                webViewClient = WebViewClient()
+
+                                val videoId = playerState.youtubeVideoId
+                                val html = """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                                        <style>
+                                            * { margin: 0; padding: 0; }
+                                            body { background: #000; overflow: hidden; }
+                                            #player { width: 100%; height: 200px; }
+                                        </style>
+                                    </head>
+                                    <body>
+                                        <div id="player"></div>
+                                        <script>
+                                            var tag = document.createElement('script');
+                                            tag.src = "https://www.youtube.com/iframe_api";
+                                            var firstScriptTag = document.getElementsByTagName('script')[0];
+                                            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+                                            
+                                            var player;
+                                            
+                                            function onYouTubeIframeAPIReady() {
+                                                player = new YT.Player('player', {
+                                                    height: '200',
+                                                    width: '100%',
+                                                    videoId: '$videoId',
+                                                    playerVars: {
+                                                        'autoplay': 1,
+                                                        'controls': 1,
+                                                        'playsinline': 1,
+                                                        'rel': 0,
+                                                        'fs': 0
+                                                    },
+                                                    events: {
+                                                        'onReady': function(e) {
+                                                            console.log('Player ready');
+                                                            window.playerReady = true;
+                                                            e.target.playVideo();
+                                                        },
+                                                        'onError': function(e) {
+                                                            console.error('Player error:', e.data);
+                                                            window.playerError = e.data;
+                                                            // Error 150/152 = not embeddable
+                                                            if (e.data == 150 || e.data == 152) {
+                                                                window.useFallback = true;
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                                window.player = player;
+                                            }
+                                        </script>
+                                    </body>
+                                    </html>
+                                """.trimIndent()
+
+                                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
+
+                                // Check for errors and trigger fallback
+                                postDelayed(object : Runnable {
+                                    var checkCount = 0
+                                    override fun run() {
+                                        // Check if YouTube flagged for fallback
+                                        evaluateJavascript("window.useFallback === true") { result ->
+                                            if (result == "true") {
+                                                android.util.Log.d("MusicPlayer", "YouTube error detected, switching to Deezer")
+                                                playerError = "YouTube restricted"
+                                                viewModel.useDeezerFallback()
+                                                return@evaluateJavascript
+                                            }
+                                        }
+
+                                        // Check if player is ready
+                                        evaluateJavascript("window.playerReady === true") { result ->
+                                            if (result == "true") {
+                                                isPlayerReady = true
+                                                android.util.Log.d("MusicPlayer", "YouTube player ready")
+                                            }
+                                        }
+
+                                        // Check for error code
+                                        evaluateJavascript("window.playerError") { errorResult ->
+                                            if (errorResult != null && errorResult != "null" && errorResult != "undefined") {
+                                                val errorCode = errorResult.trim('"')
+                                                android.util.Log.w("MusicPlayer", "YouTube error code: $errorCode")
+                                                // If error after 5 checks, use fallback
+                                                if (checkCount >= 5) {
+                                                    playerError = "YouTube error $errorCode"
+                                                    viewModel.useDeezerFallback()
+                                                }
+                                            }
+                                        }
+
+                                        checkCount++
+                                        if (checkCount < 10 && !isPlayerReady && playerError == null) {
+                                            postDelayed(this, 1000)
+                                        } else if (checkCount >= 10 && !isPlayerReady) {
+                                            // Timeout - use fallback
+                                            android.util.Log.w("MusicPlayer", "YouTube timeout, using Deezer fallback")
+                                            playerError = "YouTube timeout"
+                                            viewModel.useDeezerFallback()
+                                        }
                                     }
-                                }
-                            })
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                )
+                                }, 1000)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.weight(1f))
-
-            // Progress bar (only for preview, YouTube handles its own)
-            if (!hasYouTubeVideo && hasPreview) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Slider(
-                        value = playerState.progress.coerceIn(0f, 1f),
-                        onValueChange = { progress ->
-                            viewModel.seekTo(progress)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = Color.White,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                        )
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = formatTime(playerState.currentPosition),
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp
-                        )
-                        Text(
-                            text = formatTime(playerState.duration),
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
 
             // Playback controls
             Row(
@@ -312,7 +463,13 @@ fun MusicPlayerScreen(
             ) {
                 // Previous button
                 IconButton(
-                    onClick = { viewModel.playPrevious() },
+                    onClick = {
+                        webView?.destroy()
+                        webView = null
+                        isPlayerReady = false
+                        playerError = null
+                        viewModel.playPrevious()
+                    },
                     enabled = playerState.currentIndex > 0
                 ) {
                     Icon(
@@ -326,22 +483,12 @@ fun MusicPlayerScreen(
                 // Play/Pause button
                 FloatingActionButton(
                     onClick = {
-                        if (hasYouTubeVideo && isYouTubeReady) {
-                            // Control YouTube player
-                            if (playerState.isPlaying) {
-                                youtubePlayer?.pause()
-                                viewModel.pause()
-                            } else {
-                                youtubePlayer?.play()
-                                viewModel.play()
-                            }
-                        } else if (hasPreview) {
-                            // Control preview player
+                        if (isPlayerReady) {
                             viewModel.togglePlayPause()
                         }
                     },
                     modifier = Modifier.size(72.dp),
-                    containerColor = if (hasYouTubeVideo || hasPreview) Color.White else Color.Gray
+                    containerColor = if (isPlayerReady) Color.White else Color.Gray
                 ) {
                     Icon(
                         imageVector = if (playerState.isPlaying)
@@ -356,7 +503,13 @@ fun MusicPlayerScreen(
 
                 // Next button
                 IconButton(
-                    onClick = { viewModel.playNext() },
+                    onClick = {
+                        webView?.destroy()
+                        webView = null
+                        isPlayerReady = false
+                        playerError = null
+                        viewModel.playNext()
+                    },
                     enabled = playerState.currentIndex < playerState.playlist.size - 1
                 ) {
                     Icon(
@@ -406,11 +559,4 @@ fun MusicPlayerScreen(
             Spacer(modifier = Modifier.height(40.dp))
         }
     }
-}
-
-private fun formatTime(milliseconds: Long): String {
-    val seconds = (milliseconds / 1000).toInt()
-    val minutes = seconds / 60
-    val remainingSeconds = seconds % 60
-    return "%d:%02d".format(minutes, remainingSeconds)
 }

@@ -18,22 +18,37 @@ class YouTubeMusicRepository {
 
         // Check cache first
         videoIdCache[cacheKey]?.let {
-            Log.d(TAG, "Using cached video ID for: $cacheKey")
+            Log.d(TAG, "✓ Using cached video ID for: $cacheKey")
             return it
         }
 
-        // Search YouTube
-        val videoId = YouTubeSearchService.searchVideoId(track.name, track.artist)
+        Log.d(TAG, "🔍 Searching YouTube for: ${track.name} by ${track.artist}")
 
-        // Cache result
+        // Search YouTube - the API version already checks if videos are embeddable
+        var videoId = YouTubeSearchService.searchVideoId(track.name, track.artist)
+
+        // If not found, try with simplified search
+        if (videoId == null) {
+            Log.d(TAG, "Retrying with simplified search...")
+            videoId = searchWithFallback(track)
+        }
+
+        // Cache successful result
         videoId?.let {
             videoIdCache[cacheKey] = it
-        }
+            Log.d(TAG, "✓ Successfully found and cached video: $it")
+        } ?: Log.e(TAG, "✗ Could not find playable video for: $cacheKey")
 
         return videoId
     }
 
+    private suspend fun searchWithFallback(track: Track): String? {
+        // Try artist name only (for well-known artists)
+        return YouTubeSearchService.searchVideoId(track.artist, "music")
+    }
+
     fun clearCache() {
         videoIdCache.clear()
+        Log.d(TAG, "Cache cleared")
     }
 }
