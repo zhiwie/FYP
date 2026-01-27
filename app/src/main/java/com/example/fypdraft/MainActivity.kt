@@ -15,6 +15,7 @@ import com.example.fypdraft.ui.theme.FYPDraftTheme
 import com.example.fypdraft.model.AuthViewModel
 import com.google.firebase.auth.FirebaseAuth
 import com.example.fypdraft.model.SpotifyViewModel
+import com.example.fypdraft.model.IntegratedMusicViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,10 +143,11 @@ fun MoodSyncApp(spotifyViewModel: SpotifyViewModel) {
 
         "musicplayer" -> {
             MusicPlayerScreen(
-                viewModel = musicPlayerViewModel,
-                onBack = {
-                    currentScreen = "home"
-                }
+                viewModel = viewModel<IntegratedMusicViewModel>()
+//                viewModel = musicPlayerViewModel,
+//                onBack = {
+//                    currentScreen = "home"
+//                }
             )
         }
     }
