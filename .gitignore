@@ -13,3 +13,23 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+FYP-Backend/venv/
+
+
+# Uploads / temp
+uploads/
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
