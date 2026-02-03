@@ -1,0 +1,119 @@
+{
+  "relax": {
+    "energy_level": -0.7,
+    "valence": 0.3,
+    "tempo": "slow",
+    "novelty_factor": 0.2,
+    "genres": [
+      "ambient",
+      "lofi",
+      "acoustic",
+      "classical"
+    ],
+    "explanation": "Soft, calming tracks to help you unwind and relax"
+  },
+  "energize": {
+    "energy_level": 0.8,
+    "valence": 0.7,
+    "tempo": "fast",
+    "novelty_factor": 0.3,
+    "genres": [
+      "edm",
+      "rock",
+      "hip-hop",
+      "pop"
+    ],
+    "explanation": "High-energy bangers to pump you up and get moving!"
+  },
+  "discover": {
+    "energy_level": 0.0,
+    "valence": 0.0,
+    "tempo": "varied",
+    "novelty_factor": 0.9,
+    "genres": [
+      "indie",
+      "world",
+      "experimental",
+      "alternative"
+    ],
+    "explanation": "Fresh picks from diverse genres you might love"
+  },
+  "comfort": {
+    "energy_level": -0.5,
+    "valence": -0.3,
+    "tempo": "slow",
+    "novelty_factor": 0.1,
+    "genres": [
+      "indie",
+      "folk",
+      "soul",
+      "acoustic"
+    ],
+    "explanation": "Comforting, familiar songs for tough times"
+  },
+  "uplift": {
+    "energy_level": 0.5,
+    "valence": 0.8,
+    "tempo": "medium",
+    "novelty_factor": 0.4,
+    "genres": [
+      "pop",
+      "indie",
+      "soul",
+      "reggae"
+    ],
+    "explanation": "Feel-good tunes to brighten your mood and make you smile"
+  },
+  "focus": {
+    "energy_level": 0.2,
+    "valence": 0.1,
+    "tempo": "medium",
+    "novelty_factor": 0.1,
+    "genres": [
+      "instrumental",
+      "classical",
+      "ambient",
+      "electronic"
+    ],
+    "explanation": "Concentration-friendly tracks to boost productivity"
+  },
+  "sleep": {
+    "energy_level": -0.9,
+    "valence": 0.2,
+    "tempo": "very_slow",
+    "novelty_factor": 0.1,
+    "genres": [
+      "ambient",
+      "classical",
+      "nature_sounds",
+      "lullaby"
+    ],
+    "explanation": "Gentle, soothing music to help you drift off to sleep"
+  },
+  "romance": {
+    "energy_level": -0.2,
+    "valence": 0.6,
+    "tempo": "slow",
+    "novelty_factor": 0.2,
+    "genres": [
+      "r&b",
+      "soul",
+      "jazz",
+      "pop"
+    ],
+    "explanation": "Romantic and intimate tunes for special moments"
+  },
+  "nostalgia": {
+    "energy_level": 0.1,
+    "valence": 0.4,
+    "tempo": "varied",
+    "novelty_factor": 0.0,
+    "genres": [
+      "classic_rock",
+      "oldies",
+      "90s",
+      "throwback"
+    ],
+    "explanation": "Classic hits that bring back cherished memories"
+  }
+}
