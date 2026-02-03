@@ -2,29 +2,27 @@ package com.example.fypdraft.view
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.fypdraft.model.IntegratedMusicViewModel
-import com.example.fypdraft.model.MusicRecommendation
+import com.example.fypdraft.model.MusicPlayerViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(
-    viewModel: IntegratedMusicViewModel = viewModel(),
+fun EmotionChatScreen(
+    viewModel: MusicPlayerViewModel,
     onBack: () -> Unit = {}
 ) {
-    val isProcessing by viewModel.isProcessing.collectAsState()
-    val currentResponse by viewModel.currentResponse.collectAsState()
-    val error by viewModel.error.collectAsState()
-
+    // UI State
     var userInput by remember { mutableStateOf("") }
+    var isProcessing by remember { mutableStateOf(false) }
+    var aiResponse by remember { mutableStateOf<AIResponse?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -55,11 +53,41 @@ fun ChatScreen(
                 value = userInput,
                 onValueChange = { userInput = it },
                 label = { Text("How are you feeling?") },
-                placeholder = { Text("Tell me about your mood...") },
+                placeholder = { Text("Tell me about your mood... (e.g., 'I need to relax', 'feeling energetic')") },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !isProcessing,
                 minLines = 3,
-                maxLines = 5
+                maxLines = 5,
+                trailingIcon = {
+                    if (userInput.isNotBlank() && !isProcessing) {
+                        IconButton(
+                            onClick = {
+                                // Process the message
+                                isProcessing = true
+                                errorMessage = null
+
+                                // Call the AI processing
+                                viewModel.processUserMessageWithAI(
+                                    message = userInput,
+                                    onSuccess = { response ->
+                                        aiResponse = response
+                                        isProcessing = false
+                                        userInput = "" // Clear input
+                                    },
+                                    onError = { error ->
+                                        errorMessage = error
+                                        isProcessing = false
+                                    }
+                                )
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Send,
+                                contentDescription = "Send"
+                            )
+                        }
+                    }
+                }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -68,7 +96,21 @@ fun ChatScreen(
             Button(
                 onClick = {
                     if (userInput.isNotBlank()) {
-                        viewModel.processUserInput(userInput)
+                        isProcessing = true
+                        errorMessage = null
+
+                        viewModel.processUserMessageWithAI(
+                            message = userInput,
+                            onSuccess = { response ->
+                                aiResponse = response
+                                isProcessing = false
+                                userInput = ""
+                            },
+                            onError = { error ->
+                                errorMessage = error
+                                isProcessing = false
+                            }
+                        )
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -81,35 +123,42 @@ fun ChatScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                Text(if (isProcessing) "Processing..." else "Get Recommendations")
+                Text(if (isProcessing) "Processing..." else "Get AI Recommendations")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             // Error Display
-            error?.let { errorMessage ->
+            errorMessage?.let { error ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer
                     )
                 ) {
-                    Text(
-                        text = errorMessage,
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "⚠️ Error",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = error,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Response Display
-            currentResponse?.let { response ->
+            // AI Response Display
+            aiResponse?.let { response ->
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Emotion Detection Result
+                    // Intent Detection Result
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -119,71 +168,218 @@ fun ChatScreen(
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(
-                                    text = "Detected Emotion",
+                                    text = "🎯 Your Intent",
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "${response.emotion} (${(response.emotionConfidence * 100).toInt()}% confident)",
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = response.intentEmoji,
+                                        style = MaterialTheme.typography.headlineMedium
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = response.intent.uppercase(),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "${response.intentConfidence}% confident",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // Conversational Response
+                    // Current Song Emotion
+                    if (response.currentSongEmotion != null) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                                )
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        text = "🎵 Current Song Vibe",
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = response.emotionEmoji ?: "😊",
+                                            style = MaterialTheme.typography.headlineMedium
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column {
+                                            Text(
+                                                text = response.currentSongEmotion.uppercase(),
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "${response.emotionConfidence}% confident",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // AI Explanation
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
                             )
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(
-                                    text = "AI Response",
+                                    text = "✨ AI Recommendation",
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = response.conversationalReply,
-                                    style = MaterialTheme.typography.bodyMedium
+                                    text = response.explanation,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * 1.3f
                                 )
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Match quality
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Match Quality:",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    LinearProgressIndicator(
+                                        progress = response.overallConfidence / 100f,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(8.dp),
+                                        color = when {
+                                            response.overallConfidence >= 75 -> MaterialTheme.colorScheme.primary
+                                            response.overallConfidence >= 50 -> MaterialTheme.colorScheme.tertiary
+                                            else -> MaterialTheme.colorScheme.error
+                                        },
+                                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "${response.overallConfidence}%",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // Explanation
+                    // Suggested Action
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(
-                                    text = "Why these recommendations?",
+                                    text = "💡 Suggested Action",
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = response.explanation,
+                                    text = response.suggestedAction,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                             }
                         }
                     }
 
-                    // Music Recommendations Header
-                    item {
-                        Text(
-                            text = "Recommended Songs",
-                            style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
+                    // Quick Tips
+                    if (response.tips.isNotEmpty()) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        text = "💭 Quick Tips",
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    response.tips.forEach { tip ->
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 4.dp)
+                                        ) {
+                                            Text(text = "• ", style = MaterialTheme.typography.bodyMedium)
+                                            Text(text = tip, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+                }
+            }
 
-                    // Music Recommendations List
-                    items(response.musicRecommendations) { recommendation ->
-                        MusicRecommendationCard(recommendation)
+            // Initial state - show helpful prompt
+            if (aiResponse == null && errorMessage == null && !isProcessing) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "👋 Welcome to AI Music Companion!",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Tell me how you're feeling and I'll recommend the perfect music using advanced AI emotion detection.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Try saying:",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        listOf(
+                            "\"I need to relax\"",
+                            "\"Feeling energetic today!\"",
+                            "\"Help me focus on work\"",
+                            "\"I'm feeling sad\""
+                        ).forEach { example ->
+                            Text(
+                                text = "• $example",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -191,41 +387,16 @@ fun ChatScreen(
     }
 }
 
-@Composable
-fun MusicRecommendationCard(recommendation: MusicRecommendation) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = recommendation.songTitle,
-                style = MaterialTheme.typography.titleMedium
-            )
-            Text(
-                text = recommendation.artist,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = recommendation.reason,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = MaterialTheme.shapes.small
-            ) {
-                Text(
-                    text = recommendation.mood,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-        }
-    }
-}
+// Data class for AI response
+data class AIResponse(
+    val intent: String,
+    val intentConfidence: Int,
+    val intentEmoji: String,
+    val currentSongEmotion: String?,
+    val emotionConfidence: Int,
+    val emotionEmoji: String?,
+    val explanation: String,
+    val overallConfidence: Int,
+    val suggestedAction: String,
+    val tips: List<String>
+)

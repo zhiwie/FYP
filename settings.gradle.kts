@@ -16,6 +16,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+
+        // to install tarsos dependencies in maven
+        maven { url = uri("https://jitpack.io") }
     }
 }
 

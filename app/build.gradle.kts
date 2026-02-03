@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "com.example.fypdraft"
-    compileSdk=36
+    compileSdk=35
 
     defaultConfig {
         applicationId = "com.example.fypdraft"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -52,6 +52,10 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+    aaptOptions {
+        noCompress ("tflite")
+        noCompress ("lite")
     }
 }
 
@@ -137,4 +141,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.6.2")
 
+    // Tensorflow and be dependencies
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 }

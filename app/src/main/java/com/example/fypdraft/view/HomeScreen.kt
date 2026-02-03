@@ -43,7 +43,8 @@ fun HomeScreen(
     onNavigateToLibrary: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
     onNavigateToSpotify: () -> Unit = {},
-    onNavigateToMusicPlayer: () -> Unit = {},
+    onNavigateToMusicPlayer: () -> Unit = {},  // ADDED THIS MISSING PARAMETER
+    onNavigateToEmotionChat: () -> Unit = {},
     onSignOut: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -364,23 +365,34 @@ fun HomeScreen(
                 Spacer(Modifier.height(30.dp))
             }
 
-            // Floating Chat Button
+            // Floating Chat Button for AI Emotion Recognition
             FloatingActionButton(
-                onClick = { /* TODO: Open chat */ },
+                onClick = onNavigateToEmotionChat,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(16.dp)
                     .padding(bottom = 140.dp)
                     .size(64.dp),
-                containerColor = Color(0xFF808080),
+                containerColor = Color(0xFF6A5ACD),  // Changed to a nicer purple to stand out
                 shape = CircleShape
             ) {
-                Text(
-                    text = "Chat",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Chat,
+                        contentDescription = "AI Music Chat",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "AI",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp
+                    )
+                }
             }
         }
     }
