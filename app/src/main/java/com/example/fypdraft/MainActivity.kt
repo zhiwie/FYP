@@ -1,5 +1,6 @@
 package com.example.fypdraft
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -14,19 +15,21 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.fypdraft.view.*
-import com.example.fypdraft.ui.theme.FYPDraftTheme
-import com.example.fypdraft.model.AuthViewModel
-import com.example.fypdraft.model.SpotifyViewModel
-import com.example.fypdraft.model.MusicPlayerViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.example.fypdraft.model.AuthViewModel
+import com.example.fypdraft.model.MusicPlayerViewModel
+import com.example.fypdraft.model.SpotifyViewModel
+import com.example.fypdraft.ui.theme.FYPDraftTheme
+import com.example.fypdraft.view.*
+import com.spotify.sdk.android.auth.AuthorizationClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var musicPlayerViewModel: MusicPlayerViewModel
+    var spotifyViewModel: SpotifyViewModel? = null
     private val TAG = "MainActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,7 +38,6 @@ class MainActivity : ComponentActivity() {
         try {
             Log.d(TAG, "🚀 Starting MoodSync App...")
 
-            // Initialize MusicPlayerViewModel with Application context
             musicPlayerViewModel = ViewModelProvider(
                 this,
                 MusicPlayerViewModelFactory(application)
@@ -45,16 +47,15 @@ class MainActivity : ComponentActivity() {
             setContent {
                 FYPDraftTheme {
                     Surface(modifier = Modifier.fillMaxSize()) {
-                        // Show loading screen while ML models initialize
-                        AppInitializer(musicPlayerViewModel)
+                        AppInitializer(
+                            activity = this@MainActivity,
+                            musicPlayerViewModel = musicPlayerViewModel
+                        )
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error in onCreate", e)
-            e.printStackTrace()
-
-            // Still try to show the app even if ML models fail
             setContent {
                 FYPDraftTheme {
                     Surface(modifier = Modifier.fillMaxSize()) {
@@ -65,10 +66,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        Log.d(TAG, "📲 onNewIntent received: ${intent.data}")
+        setIntent(intent)
+    }
+
+    @Deprecated("Required for Spotify Auth SDK callback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode == SpotifyViewModel.SPOTIFY_AUTH_REQUEST_CODE) {
+            Log.d(TAG, "📲 Spotify auth result received via onActivityResult")
+            val response = AuthorizationClient.getResponse(resultCode, data)
+            Log.d(TAG, "Response type: ${response.type}, token null: ${response.accessToken == null}")
+            spotifyViewModel?.handleAuthResult(resultCode, response)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
-            // Clean up ML models
             musicPlayerViewModel.cleanupMLModels()
             Log.d(TAG, "🧹 Resources cleaned up")
         } catch (e: Exception) {
@@ -78,7 +96,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AppInitializer(musicPlayerViewModel: MusicPlayerViewModel) {
+fun AppInitializer(
+    activity: MainActivity,
+    musicPlayerViewModel: MusicPlayerViewModel
+) {
     var isInitialized by remember { mutableStateOf(false) }
     var initError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -87,39 +108,31 @@ fun AppInitializer(musicPlayerViewModel: MusicPlayerViewModel) {
         scope.launch {
             try {
                 Log.d("AppInitializer", "⏳ Initializing ML models...")
-
-                // Initialize ML models in background
                 musicPlayerViewModel.initializeMLModels()
-
-                // Small delay to show loading screen
                 delay(500)
-
                 isInitialized = true
                 Log.d("AppInitializer", "✅ ML models ready!")
             } catch (e: Exception) {
                 Log.e("AppInitializer", "⚠️ ML initialization failed, continuing anyway", e)
                 initError = e.message
-                // Still allow app to continue
                 isInitialized = true
             }
         }
     }
 
-    when {
-        !isInitialized -> {
-            LoadingScreen()
+    if (!isInitialized) {
+        LoadingScreen()
+    } else {
+        val spotifyViewModel = remember {
+            SpotifyViewModel(activity).also { activity.spotifyViewModel = it }
         }
-        else -> {
-            val spotifyViewModel = SpotifyViewModel(
-                androidx.compose.ui.platform.LocalContext.current as ComponentActivity
-            )
 
-            MoodSyncApp(
-                spotifyViewModel = spotifyViewModel,
-                musicPlayerViewModel = musicPlayerViewModel,
-                mlInitError = initError
-            )
-        }
+        MoodSyncApp(
+            activity = activity,
+            spotifyViewModel = spotifyViewModel,
+            musicPlayerViewModel = musicPlayerViewModel,
+            mlInitError = initError
+        )
     }
 }
 
@@ -148,6 +161,7 @@ fun ErrorScreen(errorMessage: String) {
 
 @Composable
 fun MoodSyncApp(
+    activity: MainActivity,
     spotifyViewModel: SpotifyViewModel,
     musicPlayerViewModel: MusicPlayerViewModel,
     mlInitError: String? = null
@@ -165,7 +179,6 @@ fun MoodSyncApp(
         )
     }
 
-    // Show warning if ML models failed to load
     LaunchedEffect(mlInitError) {
         if (mlInitError != null) {
             Log.w("MoodSyncApp", "⚠️ App running without ML features: $mlInitError")
@@ -173,115 +186,57 @@ fun MoodSyncApp(
     }
 
     when (currentScreen) {
-        "login" -> {
-            LoginScreen(
-                viewModel = authViewModel,
-                onLoginSuccess = {
-                    currentScreen = "home"
-                },
-                onForgotPassword = {
-                    currentScreen = "reset"
-                },
-                onCreateAccount = {
-                    currentScreen = "signup"
-                },
-                onTryDemo = {
-                    currentScreen = "home"
-                }
-            )
-        }
-
-        "signup" -> {
-            SignUpScreen(
-                viewModel = authViewModel,
-                onSignUpSuccess = {
-                    currentScreen = "login"
-                },
-                onNavigateToLogin = {
-                    currentScreen = "login"
-                }
-            )
-        }
-
-        "reset" -> {
-            ResetPWScreen(
-                viewModel = authViewModel,
-                onResetSuccess = {
-                    currentScreen = "login"
-                },
-                onBack = {
-                    currentScreen = "login"
-                }
-            )
-        }
-
-        "home" -> {
-            HomeScreen(
-                musicPlayerViewModel = musicPlayerViewModel,
-                onNavigateToLibrary = {
-                    // TODO: Navigate to library
-                },
-                onNavigateToSettings = {
-                    currentScreen = "settings"
-                },
-                onNavigateToSpotify = {
-                    currentScreen = "spotify"
-                },
-                onNavigateToMusicPlayer = {
-                    currentScreen = "musicplayer"
-                },
-                onNavigateToEmotionChat = {
-                    currentScreen = "emotionchat"
-                },
-                onSignOut = {
-                    authViewModel.signOut()
-                    currentScreen = "login"
-                }
-            )
-        }
-
-        "settings" -> {
-            SettingsScreen(
-                onBack = {
-                    currentScreen = "home"
-                },
-                onSignOut = {
-                    authViewModel.signOut()
-                    currentScreen = "login"
-                }
-            )
-        }
-
-        "spotify" -> {
-            SpotifyConnectionScreen(
-                spotifyViewModel = spotifyViewModel,
-                onBack = {
-                    currentScreen = "home"
-                }
-            )
-        }
-
-        "musicplayer" -> {
-            MusicPlayerScreen(
-                viewModel = musicPlayerViewModel,
-                onBack = {
-                    currentScreen = "home"
-                }
-            )
-        }
-
-        "emotionchat" -> {
-            EmotionChatScreen(
-                viewModel = musicPlayerViewModel,
-                onBack = {
-                    currentScreen = "home"
-                }
-            )
-        }
+        "login" -> LoginScreen(
+            viewModel = authViewModel,
+            onLoginSuccess = { currentScreen = "home" },
+            onForgotPassword = { currentScreen = "reset" },
+            onCreateAccount = { currentScreen = "signup" },
+            onTryDemo = { currentScreen = "home" }
+        )
+        "signup" -> SignUpScreen(
+            viewModel = authViewModel,
+            onSignUpSuccess = { currentScreen = "login" },
+            onNavigateToLogin = { currentScreen = "login" }
+        )
+        "reset" -> ResetPWScreen(
+            viewModel = authViewModel,
+            onResetSuccess = { currentScreen = "login" },
+            onBack = { currentScreen = "login" }
+        )
+        "home" -> HomeScreen(
+            musicPlayerViewModel = musicPlayerViewModel,
+            onNavigateToLibrary = { /* TODO */ },
+            onNavigateToSettings = { currentScreen = "settings" },
+            onNavigateToSpotify = { currentScreen = "spotify" },
+            onNavigateToMusicPlayer = { currentScreen = "musicplayer" },
+            onNavigateToEmotionChat = { currentScreen = "emotionchat" },
+            onSignOut = {
+                authViewModel.signOut()
+                currentScreen = "login"
+            }
+        )
+        "settings" -> SettingsScreen(
+            onBack = { currentScreen = "home" },
+            onSignOut = {
+                authViewModel.signOut()
+                currentScreen = "login"
+            }
+        )
+        "spotify" -> SpotifyConnectionScreen(
+            spotifyViewModel = spotifyViewModel,
+            onBack = { currentScreen = "home" }
+        )
+        "musicplayer" -> MusicPlayerScreen(
+            viewModel = musicPlayerViewModel,
+            onBack = { currentScreen = "home" }
+        )
+        "emotionchat" -> EmotionChatScreen(
+            viewModel = musicPlayerViewModel,
+            onBack = { currentScreen = "home" }
+        )
     }
 }
 
-// ViewModelFactory to pass Application to MusicPlayerViewModel
 class MusicPlayerViewModelFactory(
     private val application: android.app.Application
 ) : ViewModelProvider.Factory {
