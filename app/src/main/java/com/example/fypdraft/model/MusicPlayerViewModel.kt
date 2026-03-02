@@ -8,7 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fypdraft.data.repository.YouTubeMusicRepository
 import com.example.fypdraft.ml.*
-import com.example.fypdraft.view.AIResponse
+// AIResponse is now in com.example.fypdraft.model — no view import needed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,40 +16,32 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.Timestamp
+
 /**
  * Unified MusicPlayerViewModel
- * Combines music playback with AI emotion detection and recommendations
+ * Combines music playback with AI emotion detection and recommendations.
  */
 class MusicPlayerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val TAG = "MusicPlayerViewModel"
 
-    // ==========================================
-    // Music Player Components
-    // ==========================================
-
     private val youtubeRepository = YouTubeMusicRepository()
     private var mediaPlayer: MediaPlayer? = null
 
-    // ==========================================
-    // AI/ML Components
-    // ==========================================
-
     private var recommendationEngine: MusicRecommendationEngine? = null
+
+    // ── Firebase ──────────────────────────────────────────────────────────────
+    private val firestore = FirebaseFirestore.getInstance()
+    private val auth = FirebaseAuth.getInstance()
 
     private val _mlReady = MutableStateFlow(false)
     val mlReady: StateFlow<Boolean> = _mlReady.asStateFlow()
 
-    // ==========================================
-    // Player State
-    // ==========================================
-
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
-
-    // ==========================================
-    // AI State
-    // ==========================================
 
     private val _currentSongEmotion = MutableStateFlow<EmotionResult?>(null)
     val currentSongEmotion: StateFlow<EmotionResult?> = _currentSongEmotion.asStateFlow()
@@ -60,20 +52,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private val _aiError = MutableStateFlow<String?>(null)
     val aiError: StateFlow<String?> = _aiError.asStateFlow()
 
-    // ==========================================
-    // Initialization
-    // ==========================================
+    // ── ML init ───────────────────────────────────────────────────────────────
 
-    /**
-     * Initialize ML models - should be called from MainActivity
-     */
     fun initializeMLModels() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 Log.d(TAG, "🚀 Initializing ML Recommendation Engine...")
-
                 recommendationEngine = MusicRecommendationEngine(getApplication())
-
                 withContext(Dispatchers.Main) {
                     _mlReady.value = true
                     Log.d(TAG, "✅ ML models ready!")
@@ -88,14 +73,36 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // ==========================================
-    // Core AI Function - Process User Message
-    // ==========================================
+    // ── Firebase: save playback history ──────────────────────────────────────
 
-    /**
-     * Process user message with AI models
-     * Call this from EmotionChatScreen
-     */
+    private fun savePlaybackHistory(track: Track) {
+        val userId = auth.currentUser?.uid ?: run {
+            Log.w(TAG, "⚠️ Cannot save playback history — user not logged in")
+            return
+        }
+        val data = hashMapOf(
+            "userId"    to userId,
+            "title"     to track.name,
+            "artist"    to track.artist,
+            "trackId"   to track.id,
+            "albumArt"  to (track.albumArtUrl ?: ""),
+            "timestamp" to Timestamp.now()
+        )
+        firestore.collection("playbackHistory")
+            .document(userId)
+            .collection("tracks")
+            .add(data)
+            .addOnSuccessListener {
+                Log.d(TAG, "✅ Playback history saved: ${track.name} by ${track.artist}")
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "❌ Failed to save playback history", e)
+            }
+    }
+
+    // ── TFLite recommendation (used by the old EmotionChatScreen) ─────────────
+    // AIResponse is now imported from com.example.fypdraft.model (same package)
+
     fun processUserMessageWithAI(
         message: String,
         onSuccess: (AIResponse) -> Unit,
@@ -110,42 +117,34 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 Log.d(TAG, "🎯 Processing user message: $message")
 
-                // Get current song info if available
-                val currentState = _playerState.value
-                val currentSongUri = currentState.currentTrack?.let {
-                    getSongUri(it)
-                }
-                val currentSongId = currentState.currentTrack?.id
+                val currentState   = _playerState.value
+                val currentSongUri = currentState.currentTrack?.let { getSongUri(it) }
+                val currentSongId  = currentState.currentTrack?.id
 
-                // Process with recommendation engine
                 val result = recommendationEngine?.processRecommendation(
-                    userMessage = message,
+                    userMessage    = message,
                     currentSongUri = currentSongUri,
-                    currentSongId = currentSongId
+                    currentSongId  = currentSongId
                 )
 
                 if (result?.success == true && result.explanation != null) {
-                    // Build AI response
                     val response = AIResponse(
-                        intent = result.intentResult?.topIntent ?: "unknown",
-                        intentConfidence = ((result.intentResult?.confidence ?: 0f) * 100).toInt(),
-                        intentEmoji = getIntentEmoji(result.intentResult?.topIntent),
+                        intent             = result.intentResult?.topIntent ?: "unknown",
+                        intentConfidence   = ((result.intentResult?.confidence ?: 0f) * 100).toInt(),
+                        intentEmoji        = getIntentEmoji(result.intentResult?.topIntent),
                         currentSongEmotion = result.emotionResult?.topEmotion,
-                        emotionConfidence = ((result.emotionResult?.confidence ?: 0f) * 100).toInt(),
-                        emotionEmoji = result.emotionResult?.emoji,
-                        explanation = result.explanation.text,
-                        overallConfidence = result.explanation.confidence,
-                        suggestedAction = generateSuggestedAction(
+                        emotionConfidence  = ((result.emotionResult?.confidence ?: 0f) * 100).toInt(),
+                        emotionEmoji       = result.emotionResult?.emoji,
+                        explanation        = result.explanation.text,
+                        overallConfidence  = result.explanation.confidence,
+                        suggestedAction    = generateSuggestedAction(
                             result.intentResult?.topIntent,
                             result.emotionResult?.topEmotion
                         ),
                         tips = generateTips(result.intentResult?.topIntent)
                     )
 
-                    // Store current song emotion
-                    result.emotionResult?.let {
-                        _currentSongEmotion.value = it
-                    }
+                    result.emotionResult?.let { _currentSongEmotion.value = it }
 
                     Log.d(TAG, "✅ AI Response generated successfully")
                     onSuccess(response)
@@ -154,7 +153,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     Log.w(TAG, "⚠️ AI processing failed: $error")
                     onError(error)
                 }
-
             } catch (e: Exception) {
                 Log.e(TAG, "❌ AI processing error", e)
                 onError("AI processing failed: ${e.message}")
@@ -162,31 +160,17 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /**
-     * Analyze emotion of currently playing song
-     */
     fun analyzeCurrentSongEmotion() {
-        if (!_mlReady.value) {
-            Log.w(TAG, "⚠️ ML models not ready for emotion analysis")
-            return
-        }
-
+        if (!_mlReady.value) return
         val currentTrack = _playerState.value.currentTrack ?: return
 
         viewModelScope.launch {
             _isAnalyzingEmotion.value = true
-
             try {
-                Log.d(TAG, "🎵 Analyzing emotion for: ${currentTrack.name}")
-
-                val uri = getSongUri(currentTrack)
+                val uri    = getSongUri(currentTrack)
                 val result = recommendationEngine?.processAudio(uri, currentTrack.id)
-
-                _currentSongEmotion.value = result
-                _isAnalyzingEmotion.value = false
-
-                Log.d(TAG, "✅ Emotion detected: ${result?.topEmotion} ${result?.emoji}")
-
+                _currentSongEmotion.value  = result
+                _isAnalyzingEmotion.value  = false
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Emotion analysis error", e)
                 _isAnalyzingEmotion.value = false
@@ -194,27 +178,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /**
-     * Preload emotions for playlist
-     */
     fun preloadPlaylistEmotions(tracks: List<Track>) {
-        if (!_mlReady.value) {
-            Log.w(TAG, "⚠️ ML models not ready for preloading")
-            return
-        }
-
+        if (!_mlReady.value) return
         viewModelScope.launch {
             try {
                 val uriPairs = tracks.mapNotNull { track ->
-                    try {
-                        val uri = getSongUri(track)
-                        uri to track.id
-                    } catch (e: Exception) {
-                        null
-                    }
+                    try { getSongUri(track) to track.id } catch (e: Exception) { null }
                 }
-
-                Log.d(TAG, "📚 Preloading emotions for ${uriPairs.size} tracks")
                 recommendationEngine?.preloadEmotions(uriPairs)
             } catch (e: Exception) {
                 Log.e(TAG, "Error preloading emotions", e)
@@ -222,68 +192,93 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // ==========================================
-    // Music Player Functions
-    // ==========================================
+    // ── Music player ──────────────────────────────────────────────────────────
 
     fun loadTrack(track: Track, playlist: List<Track> = emptyList()) {
         val finalPlaylist = if (playlist.isEmpty()) listOf(track) else playlist
-        val currentIndex = finalPlaylist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        val currentIndex  = finalPlaylist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
 
-        // Debug logging
         Log.d(TAG, "Loading track: ${track.name} by ${track.artist}")
-        Log.d(TAG, "Track preview URL: ${track.previewUrl}")
+        savePlaybackHistory(track) // ← Save to Firebase
 
-        // Release previous media player if using Deezer
         mediaPlayer?.release()
         mediaPlayer = null
 
         _playerState.value = PlayerState(
-            currentTrack = track,
-            isPlaying = false,
-            playlist = finalPlaylist,
-            currentIndex = currentIndex,
-            duration = track.durationMs,
+            currentTrack   = track,
+            isPlaying      = false,
+            playlist       = finalPlaylist,
+            currentIndex   = currentIndex,
+            duration       = track.durationMs,
             isLoadingVideo = true
         )
 
-        // Try to load YouTube video ID
         viewModelScope.launch {
             val videoId = youtubeRepository.getYouTubeVideoId(track)
             _playerState.value = _playerState.value.copy(
-                youtubeVideoId = videoId,
-                isLoadingVideo = false,
-                usingDeezerFallback = videoId == null // Use Deezer if no YouTube found
+                youtubeVideoId      = videoId,
+                isLoadingVideo      = false,
+                usingDeezerFallback = videoId == null
             )
 
-            // If no YouTube video, start Deezer preview automatically
             if (videoId == null && !track.previewUrl.isNullOrEmpty()) {
-                Log.d(TAG, "No YouTube found, auto-starting Deezer preview")
                 playDeezerPreview(track.previewUrl)
             }
 
-            // Analyze emotion of newly loaded track (if ML ready)
-            if (_mlReady.value) {
-                analyzeCurrentSongEmotion()
+            if (_mlReady.value) analyzeCurrentSongEmotion()
+        }
+    }
+
+    /**
+     * Load a track that already has a known YouTube video ID (from ChatGPT recommendations).
+     * Skips the YouTube search — player starts immediately.
+     * Falls back to normal search if knownVideoId is null.
+     */
+    fun loadTrackWithVideoId(track: Track, knownVideoId: String?) {
+        Log.d(TAG, "Loading track with video ID: ${track.name} by ${track.artist}")
+        savePlaybackHistory(track) // ← Save to Firebase
+
+        mediaPlayer?.release()
+        mediaPlayer = null
+
+        _playerState.value = PlayerState(
+            currentTrack        = track,
+            isPlaying           = false,
+            playlist            = listOf(track),
+            currentIndex        = 0,
+            duration            = track.durationMs,
+            youtubeVideoId      = knownVideoId,
+            isLoadingVideo      = knownVideoId == null,
+            usingDeezerFallback = false
+        )
+
+        if (knownVideoId == null) {
+            viewModelScope.launch {
+                val videoId = youtubeRepository.getYouTubeVideoId(track)
+                _playerState.value = _playerState.value.copy(
+                    youtubeVideoId      = videoId,
+                    isLoadingVideo      = false,
+                    usingDeezerFallback = videoId == null
+                )
+                if (videoId == null && !track.previewUrl.isNullOrEmpty()) {
+                    playDeezerPreview(track.previewUrl)
+                }
             }
         }
     }
 
     fun useDeezerFallback() {
         val currentTrack = _playerState.value.currentTrack
-        Log.d(TAG, "Attempting Deezer fallback for: ${currentTrack?.name}")
-
         if (currentTrack != null && !currentTrack.previewUrl.isNullOrEmpty()) {
             _playerState.value = _playerState.value.copy(
                 usingDeezerFallback = true,
-                youtubeVideoId = null
+                youtubeVideoId      = null
             )
             playDeezerPreview(currentTrack.previewUrl)
         } else {
-            Log.e(TAG, "No preview URL available for fallback")
             _playerState.value = _playerState.value.copy(
                 usingDeezerFallback = false,
-                youtubeVideoId = null
+                youtubeVideoId      = null
             )
         }
     }
@@ -298,195 +293,119 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                         .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
                         .build()
                 )
-
                 setDataSource(previewUrl)
-
                 setOnPreparedListener {
                     start()
                     _playerState.value = _playerState.value.copy(
                         isPlaying = true,
-                        duration = duration.toLong()
+                        duration  = duration.toLong()
                     )
                 }
-
                 setOnErrorListener { _, what, extra ->
                     Log.e(TAG, "MediaPlayer error: what=$what, extra=$extra")
                     _playerState.value = _playerState.value.copy(
-                        isPlaying = false,
+                        isPlaying           = false,
                         usingDeezerFallback = false
                     )
                     true
                 }
-
-                setOnCompletionListener {
-                    playNext()
-                }
-
+                setOnCompletionListener { playNext() }
                 prepareAsync()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error playing Deezer preview", e)
             _playerState.value = _playerState.value.copy(
-                isPlaying = false,
+                isPlaying           = false,
                 usingDeezerFallback = false
             )
         }
     }
 
     fun togglePlayPause() {
-        val currentState = _playerState.value
-
-        if (currentState.usingDeezerFallback) {
-            // Control MediaPlayer
+        val state = _playerState.value
+        if (state.usingDeezerFallback) {
             mediaPlayer?.let { player ->
-                if (currentState.isPlaying) {
-                    player.pause()
-                    _playerState.value = currentState.copy(isPlaying = false)
-                } else {
-                    player.start()
-                    _playerState.value = currentState.copy(isPlaying = true)
-                }
+                if (state.isPlaying) { player.pause(); _playerState.value = state.copy(isPlaying = false) }
+                else                 { player.start(); _playerState.value = state.copy(isPlaying = true)  }
             }
         } else {
-            // YouTube player is controlled by WebView
-            _playerState.value = currentState.copy(
-                isPlaying = !currentState.isPlaying
-            )
+            _playerState.value = state.copy(isPlaying = !state.isPlaying)
         }
     }
 
     fun play() {
-        val currentState = _playerState.value
-
-        if (currentState.usingDeezerFallback) {
-            mediaPlayer?.start()
-        }
-
-        _playerState.value = currentState.copy(isPlaying = true)
+        if (_playerState.value.usingDeezerFallback) mediaPlayer?.start()
+        _playerState.value = _playerState.value.copy(isPlaying = true)
     }
 
     fun pause() {
-        val currentState = _playerState.value
-
-        if (currentState.usingDeezerFallback) {
-            mediaPlayer?.pause()
-        }
-
-        _playerState.value = currentState.copy(isPlaying = false)
+        if (_playerState.value.usingDeezerFallback) mediaPlayer?.pause()
+        _playerState.value = _playerState.value.copy(isPlaying = false)
     }
 
     fun playNext() {
-        val currentState = _playerState.value
-        val nextIndex = currentState.currentIndex + 1
-
-        if (nextIndex < currentState.playlist.size) {
-            loadTrack(currentState.playlist[nextIndex], currentState.playlist)
+        val state     = _playerState.value
+        val nextIndex = state.currentIndex + 1
+        if (nextIndex < state.playlist.size) {
+            loadTrack(state.playlist[nextIndex], state.playlist)
             play()
         }
     }
 
     fun playPrevious() {
-        val currentState = _playerState.value
-        val previousIndex = currentState.currentIndex - 1
-
+        val state          = _playerState.value
+        val previousIndex  = state.currentIndex - 1
         if (previousIndex >= 0) {
-            loadTrack(currentState.playlist[previousIndex], currentState.playlist)
+            loadTrack(state.playlist[previousIndex], state.playlist)
             play()
         }
     }
 
     fun seekTo(progress: Float) {
         mediaPlayer?.let { player ->
-            val duration = player.duration
-            val position = (duration * progress).toInt()
-            player.seekTo(position)
+            player.seekTo((player.duration * progress).toInt())
             _playerState.value = _playerState.value.copy(progress = progress)
         }
     }
 
-    // ==========================================
-    // Helper Functions
-    // ==========================================
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun getSongUri(track: Track): Uri {
-        // Return URI from preview URL
-        return Uri.parse(track.previewUrl ?: "")
+    private fun getSongUri(track: Track): Uri = Uri.parse(track.previewUrl ?: "")
+
+    private fun getIntentEmoji(intent: String?) = when (intent) {
+        "relax"     -> "🧘"
+        "energize"  -> "💪"
+        "comfort"   -> "🤗"
+        "focus"     -> "🎯"
+        "discover"  -> "🔍"
+        "nostalgia" -> "💭"
+        "romance"   -> "💕"
+        "sleep"     -> "😴"
+        "uplift"    -> "🌟"
+        else        -> "🎵"
     }
 
-    private fun getIntentEmoji(intent: String?): String {
-        return when (intent) {
-            "relax" -> "🧘"
-            "energize" -> "💪"
-            "comfort" -> "🤗"
-            "focus" -> "🎯"
-            "discover" -> "🔍"
-            "nostalgia" -> "💭"
-            "romance" -> "💕"
-            "sleep" -> "😴"
-            "uplift" -> "🌟"
-            else -> "🎵"
-        }
+    private fun generateSuggestedAction(intent: String?, emotion: String?) = when {
+        intent == "relax"    && emotion == "calm"      -> "Perfect match! Continue enjoying this calming music."
+        intent == "energize" && emotion == "energetic" -> "Great choice! This energetic track will keep you pumped up."
+        intent == "relax"    && emotion == "energetic" -> "This song might be too energetic. Try skipping to find something calmer."
+        intent == "energize" && emotion == "calm"      -> "This song is too calm for your energetic mood. Try the next track!"
+        intent == "focus"                              -> "Minimize distractions and let this music help you concentrate."
+        intent == "sleep"                              -> "Dim the lights and let this soothing music help you drift off."
+        intent == "comfort"  && emotion == "sad"       -> "It's okay to feel this way. This music is here to comfort you."
+        else                                           -> "Enjoy this music that matches your current vibe!"
     }
 
-    private fun generateSuggestedAction(intent: String?, emotion: String?): String {
-        return when {
-            intent == "relax" && emotion == "calm" ->
-                "Perfect match! Continue enjoying this calming music."
-            intent == "energize" && emotion == "energetic" ->
-                "Great choice! This energetic track will keep you pumped up."
-            intent == "relax" && emotion == "energetic" ->
-                "This song might be too energetic. Try skipping to find something calmer."
-            intent == "energize" && emotion == "calm" ->
-                "This song is too calm for your energetic mood. Try the next track!"
-            intent == "focus" ->
-                "Minimize distractions and let this music help you concentrate."
-            intent == "sleep" ->
-                "Dim the lights and let this soothing music help you drift off."
-            intent == "comfort" && emotion == "sad" ->
-                "It's okay to feel this way. This music is here to comfort you."
-            else ->
-                "Enjoy this music that matches your current vibe!"
-        }
+    private fun generateTips(intent: String?) = when (intent) {
+        "relax"    -> listOf("Find a comfortable position", "Take deep breaths while listening", "Close your eyes and focus on the music")
+        "energize" -> listOf("Move your body to the beat", "Turn up the volume (safely!)", "Use this energy for your activities")
+        "focus"    -> listOf("Minimize visual distractions", "Use headphones for better immersion", "Take breaks every 25-30 minutes")
+        "sleep"    -> listOf("Keep volume low", "Use a sleep timer if available", "Avoid screens after this")
+        "comfort"  -> listOf("Allow yourself to feel emotions", "Music can be therapeutic", "Reach out to someone if you need support")
+        else       -> listOf("Discover new music based on your mood", "Create playlists for different feelings", "Let music enhance your day")
     }
 
-    private fun generateTips(intent: String?): List<String> {
-        return when (intent) {
-            "relax" -> listOf(
-                "Find a comfortable position",
-                "Take deep breaths while listening",
-                "Close your eyes and focus on the music"
-            )
-            "energize" -> listOf(
-                "Move your body to the beat",
-                "Turn up the volume (safely!)",
-                "Use this energy for your activities"
-            )
-            "focus" -> listOf(
-                "Minimize visual distractions",
-                "Use headphones for better immersion",
-                "Take breaks every 25-30 minutes"
-            )
-            "sleep" -> listOf(
-                "Keep volume low",
-                "Use a sleep timer if available",
-                "Avoid screens after this"
-            )
-            "comfort" -> listOf(
-                "Allow yourself to feel emotions",
-                "Music can be therapeutic",
-                "Reach out to someone if you need support"
-            )
-            else -> listOf(
-                "Discover new music based on your mood",
-                "Create playlists for different feelings",
-                "Let music enhance your day"
-            )
-        }
-    }
-
-    // ==========================================
-    // Cleanup
-    // ==========================================
+    // ── Cleanup ───────────────────────────────────────────────────────────────
 
     fun cleanupMLModels() {
         viewModelScope.launch(Dispatchers.IO) {

@@ -1,385 +1,163 @@
 package com.example.fypdraft.view
 
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import com.example.fypdraft.model.MusicPlayerViewModel
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import com.example.fypdraft.model.*
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EmotionChatScreen(
-    viewModel: MusicPlayerViewModel,
-    onBack: () -> Unit = {}
+    chatViewModel: ChatGPTViewModel = viewModel(),
+    onBack: () -> Unit = {},
+    onSongClick: (SongRecommendation) -> Unit = {}
 ) {
-    // UI State
-    var userInput by remember { mutableStateOf("") }
-    var isProcessing by remember { mutableStateOf(false) }
-    var aiResponse by remember { mutableStateOf<AIResponse?>(null) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val messages     by chatViewModel.messages.collectAsState()
+    val typingState  by chatViewModel.typingState.collectAsState()
+    val uiState      by chatViewModel.uiState.collectAsState()
+
+    var inputText by remember { mutableStateOf("") }
+    val listState     = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val focusManager  = LocalFocusManager.current
+    val snackbarHost  = remember { SnackbarHostState() }
+
+    // Auto-scroll when messages or typing state changes
+    LaunchedEffect(messages.size, typingState) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
+    // Show error snackbar
+    LaunchedEffect(uiState) {
+        when (uiState) {
+            is ChatUiState.Error         -> snackbarHost.showSnackbar((uiState as ChatUiState.Error).message)
+            ChatUiState.NetworkError     -> snackbarHost.showSnackbar("No internet connection")
+            ChatUiState.RateLimitExceeded -> snackbarHost.showSnackbar("Rate limit hit — please wait a moment")
+            else -> {}
+        }
+        chatViewModel.dismissError()
+    }
+
+    // Voice input launcher
+    val voiceLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val spoken = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+        if (!spoken.isNullOrBlank()) inputText = spoken
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHost) },
         topBar = {
             TopAppBar(
-                title = { Text("AI Music Companion") },
+                title = {
+                    Column {
+                        Text("MoodSync AI", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Tell me how you feel",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back"
-                        )
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (messages.isNotEmpty()) {
+                        IconButton(onClick = { chatViewModel.clearConversation() }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Clear chat")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 )
             )
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp)
-        ) {
-            // User Input Section
-            OutlinedTextField(
-                value = userInput,
-                onValueChange = { userInput = it },
-                label = { Text("How are you feeling?") },
-                placeholder = { Text("Tell me about your mood... (e.g., 'I need to relax', 'feeling energetic')") },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isProcessing,
-                minLines = 3,
-                maxLines = 5,
-                trailingIcon = {
-                    if (userInput.isNotBlank() && !isProcessing) {
-                        IconButton(
-                            onClick = {
-                                // Process the message
-                                isProcessing = true
-                                errorMessage = null
-
-                                // Call the AI processing
-                                viewModel.processUserMessageWithAI(
-                                    message = userInput,
-                                    onSuccess = { response ->
-                                        aiResponse = response
-                                        isProcessing = false
-                                        userInput = "" // Clear input
-                                    },
-                                    onError = { error ->
-                                        errorMessage = error
-                                        isProcessing = false
-                                    }
-                                )
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Send,
-                                contentDescription = "Send"
-                            )
-                        }
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Submit Button
-            Button(
-                onClick = {
-                    if (userInput.isNotBlank()) {
-                        isProcessing = true
-                        errorMessage = null
-
-                        viewModel.processUserMessageWithAI(
-                            message = userInput,
-                            onSuccess = { response ->
-                                aiResponse = response
-                                isProcessing = false
-                                userInput = ""
-                            },
-                            onError = { error ->
-                                errorMessage = error
-                                isProcessing = false
-                            }
-                        )
+        },
+        bottomBar = {
+            ChatInputBar(
+                text       = inputText,
+                onTextChange = { inputText = it },
+                onSend = {
+                    val msg = inputText.trim()
+                    if (msg.isNotBlank()) {
+                        chatViewModel.sendMessage(msg)
+                        inputText = ""
+                        focusManager.clearFocus()
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isProcessing && userInput.isNotBlank()
-            ) {
-                if (isProcessing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Text(if (isProcessing) "Processing..." else "Get AI Recommendations")
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Error Display
-            errorMessage?.let { error ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "⚠️ Error",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = error,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
+                onVoiceClick = {
+                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_PROMPT, "Describe your mood...")
                     }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+                    try { voiceLauncher.launch(intent) } catch (_: Exception) {}
+                },
+                isLoading = uiState is ChatUiState.Loading
+            )
+        }
+    ) { padding ->
 
-            // AI Response Display
-            aiResponse?.let { response ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            if (messages.isEmpty() && typingState == TypingState.Idle) {
+                EmptyChatPlaceholder()
+            } else {
                 LazyColumn(
+                    state  = listState,
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Intent Detection Result
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer
-                            )
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    text = "🎯 Your Intent",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = response.intentEmoji,
-                                        style = MaterialTheme.typography.headlineMedium
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column {
-                                        Text(
-                                            text = response.intent.uppercase(),
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "${response.intentConfidence}% confident",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    items(messages, key = { it.id }) { message ->
+                        ChatBubble(message = message, onSongClick = onSongClick)
                     }
 
-                    // Current Song Emotion
-                    if (response.currentSongEmotion != null) {
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                                )
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = "🎵 Current Song Vibe",
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = response.emotionEmoji ?: "😊",
-                                            style = MaterialTheme.typography.headlineMedium
-                                        )
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Column {
-                                            Text(
-                                                text = response.currentSongEmotion.uppercase(),
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                            )
-                                            Text(
-                                                text = "${response.emotionConfidence}% confident",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // AI Explanation
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer
-                            )
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    text = "✨ AI Recommendation",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = response.explanation,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * 1.3f
-                                )
-
-                                Spacer(modifier = Modifier.height(12.dp))
-
-                                // Match quality
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "Match Quality:",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    LinearProgressIndicator(
-                                        progress = response.overallConfidence / 100f,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(8.dp),
-                                        color = when {
-                                            response.overallConfidence >= 75 -> MaterialTheme.colorScheme.primary
-                                            response.overallConfidence >= 50 -> MaterialTheme.colorScheme.tertiary
-                                            else -> MaterialTheme.colorScheme.error
-                                        },
-                                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "${response.overallConfidence}%",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Suggested Action
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    text = "💡 Suggested Action",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = response.suggestedAction,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                        }
-                    }
-
-                    // Quick Tips
-                    if (response.tips.isNotEmpty()) {
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = "💭 Quick Tips",
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    response.tips.forEach { tip ->
-                                        Row(
-                                            modifier = Modifier.padding(vertical = 4.dp)
-                                        ) {
-                                            Text(text = "• ", style = MaterialTheme.typography.bodyMedium)
-                                            Text(text = tip, style = MaterialTheme.typography.bodyMedium)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Initial state - show helpful prompt
-            if (aiResponse == null && errorMessage == null && !isProcessing) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "👋 Welcome to AI Music Companion!",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Tell me how you're feeling and I'll recommend the perfect music using advanced AI emotion detection.",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "Try saying:",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        listOf(
-                            "\"I need to relax\"",
-                            "\"Feeling energetic today!\"",
-                            "\"Help me focus on work\"",
-                            "\"I'm feeling sad\""
-                        ).forEach { example ->
-                            Text(
-                                text = "• $example",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(vertical = 2.dp)
-                            )
-                        }
+                    if (typingState != TypingState.Idle) {
+                        item { TypingIndicatorBubble(typingState) }
                     }
                 }
             }
@@ -387,16 +165,309 @@ fun EmotionChatScreen(
     }
 }
 
-// Data class for AI response
-data class AIResponse(
-    val intent: String,
-    val intentConfidence: Int,
-    val intentEmoji: String,
-    val currentSongEmotion: String?,
-    val emotionConfidence: Int,
-    val emotionEmoji: String?,
-    val explanation: String,
-    val overallConfidence: Int,
-    val suggestedAction: String,
-    val tips: List<String>
-)
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun EmptyChatPlaceholder() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("🎵", fontSize = 56.sp)
+        Spacer(Modifier.height(16.dp))
+        Text("How are you feeling today?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "I'll find the perfect music for your mood.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+        Spacer(Modifier.height(24.dp))
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Try saying:", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+                Spacer(Modifier.height(8.dp))
+                listOf(
+                    "\"I need to relax after work\"",
+                    "\"Feeling energetic today!\"",
+                    "\"Help me focus on studying\"",
+                    "\"I'm feeling a bit sad\""
+                ).forEach { example ->
+                    Text(
+                        text = "• $example",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Chat bubble ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun ChatBubble(
+    message: ChatMessageUi,
+    onSongClick: (SongRecommendation) -> Unit
+) {
+    val isUser = message.sender == MessageSender.USER
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        // AI avatar
+        if (!isUser) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) { Text("🎵", fontSize = 16.sp) }
+            Spacer(Modifier.width(8.dp))
+        }
+
+        Column(
+            modifier = Modifier.widthIn(max = 300.dp),
+            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+        ) {
+            // Text bubble (only shown if text is non-empty)
+            if (message.text.isNotBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(
+                        topStart    = if (isUser) 16.dp else 4.dp,
+                        topEnd      = if (isUser) 4.dp else 16.dp,
+                        bottomStart = 16.dp,
+                        bottomEnd   = 16.dp
+                    ),
+                    color = if (isUser)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 1.dp
+                ) {
+                    Text(
+                        text  = message.text,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        color = if (isUser)
+                            MaterialTheme.colorScheme.onPrimary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            // Song recommendation cards (AI messages only)
+            if (message.songs.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                message.songs.forEach { song ->
+                    SongRecommendationCard(song = song, onClick = { onSongClick(song) })
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+
+            // Timestamp
+            Text(
+                text  = formatTime(message.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+// ── Song card ─────────────────────────────────────────────────────────────────
+
+@Composable
+fun SongRecommendationCard(
+    song: SongRecommendation,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape  = RoundedCornerShape(12.dp),
+        color  = MaterialTheme.colorScheme.surface,
+        tonalElevation  = 3.dp,
+        shadowElevation = 2.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Album art placeholder (no art URL from ChatGPT alone)
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("🎵", fontSize = 22.sp)
+            }
+
+            Spacer(Modifier.width(10.dp))
+
+            // Song info
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text  = song.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                Text(
+                    text  = song.artist,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    maxLines = 1
+                )
+                if (song.reason.isNotBlank()) {
+                    Text(
+                        text  = song.reason,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            // Play button
+            Surface(
+                modifier = Modifier.size(36.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text("▶", fontSize = 14.sp, color = MaterialTheme.colorScheme.onPrimary)
+                }
+            }
+        }
+    }
+}
+
+// ── Typing indicator ──────────────────────────────────────────────────────────
+
+@Composable
+private fun TypingIndicatorBubble(typingState: TypingState) {
+    val infinite  = rememberInfiniteTransition(label = "typing")
+    val alpha by infinite.animateFloat(
+        initialValue = 0.4f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+        label = "alpha"
+    )
+
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) { Text("🎵", fontSize = 16.sp) }
+
+        Spacer(Modifier.width(8.dp))
+
+        Surface(
+            shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 1.dp
+        ) {
+            Text(
+                text  = typingState.label,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+            )
+        }
+    }
+}
+
+// ── Input bar ─────────────────────────────────────────────────────────────────
+
+@Composable
+private fun ChatInputBar(
+    text: String,
+    onTextChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onVoiceClick: () -> Unit,
+    isLoading: Boolean
+) {
+    Surface(tonalElevation = 3.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            OutlinedTextField(
+                value   = text,
+                onValueChange = onTextChange,
+                modifier  = Modifier.weight(1f),
+                placeholder = { Text("Describe how you're feeling...") },
+                shape   = RoundedCornerShape(24.dp),
+                maxLines = 4,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() }),
+                enabled = !isLoading
+            )
+
+            Spacer(Modifier.width(8.dp))
+
+            // Voice
+            FilledTonalIconButton(
+                onClick  = onVoiceClick,
+                enabled  = !isLoading,
+                modifier = Modifier.size(48.dp)
+            ) { Icon(Icons.Default.Mic, contentDescription = "Voice input") }
+
+            Spacer(Modifier.width(6.dp))
+
+            // Send
+            FloatingActionButton(
+                onClick  = onSend,
+                modifier = Modifier.size(48.dp),
+                containerColor = if (text.isNotBlank() && !isLoading)
+                    MaterialTheme.colorScheme.primary
+                else
+                    MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        Icons.Default.Send,
+                        contentDescription = "Send",
+                        tint = if (text.isNotBlank())
+                            MaterialTheme.colorScheme.onPrimary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+private fun formatTime(ts: Long): String =
+    SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ts))
