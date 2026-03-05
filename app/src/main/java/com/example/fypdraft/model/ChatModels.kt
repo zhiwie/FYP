@@ -2,17 +2,12 @@ package com.example.fypdraft.model
 
 import java.util.UUID
 
-// ── Song recommendation (returned by ChatGPT, then enriched with YouTube ID) ──
-
 data class SongRecommendation(
     val artist: String,
     val title: String,
     val reason: String = "",
-    // Filled after YouTube lookup via existing YouTubeMusicRepository
     val youtubeVideoId: String? = null
 )
-
-// ── Chat message ──────────────────────────────────────────────────────────────
 
 enum class MessageSender { USER, AI }
 
@@ -24,24 +19,12 @@ data class ChatMessageUi(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-// ── Typing indicator states ───────────────────────────────────────────────────
-
-sealed class TypingState {
-    object Idle : TypingState()
-    object Thinking : TypingState()
-    object FindingSongs : TypingState()
-    object FilteringResponse : TypingState()
+sealed class TypingState(val label: String) {
+    object Idle : TypingState("")
+    object Thinking : TypingState("🤔 Thinking...")
+    object FindingSongs : TypingState("🎵 Finding songs...")
+    object FilteringResponse : TypingState("✨ Getting recommendations...")
 }
-
-val TypingState.label: String
-    get() = when (this) {
-        TypingState.Idle -> ""
-        TypingState.Thinking -> "🤔 Thinking..."
-        TypingState.FindingSongs -> "🎵 Finding songs for you..."
-        TypingState.FilteringResponse -> "✨ Getting recommendations..."
-    }
-
-// ── Screen-level UI state ─────────────────────────────────────────────────────
 
 sealed class ChatUiState {
     object Idle : ChatUiState()

@@ -7,7 +7,6 @@ import retrofit2.http.Header
 import retrofit2.http.POST
 
 interface ChatGPTApiService {
-
     @POST("v1/chat/completions")
     suspend fun sendMessage(
         @Header("Authorization") authorization: String,
@@ -15,8 +14,6 @@ interface ChatGPTApiService {
         @Body request: ChatGPTRequest
     ): Response<ChatGPTResponse>
 }
-
-// ── Request models ────────────────────────────────────────────────────────────
 
 data class ChatGPTRequest(
     val model: String = "gpt-3.5-turbo",
@@ -29,8 +26,6 @@ data class OpenAIMessage(
     val role: String,   // "system" | "user" | "assistant"
     val content: String
 )
-
-// ── Response models ───────────────────────────────────────────────────────────
 
 data class ChatGPTResponse(
     val id: String?,

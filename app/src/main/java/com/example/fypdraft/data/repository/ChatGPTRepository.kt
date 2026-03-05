@@ -1,8 +1,8 @@
 package com.example.fypdraft.data.repository
 
 import android.util.Log
-import com.example.fypdraft.api.RetrofitClient
-import com.example.fypdraft.data.api.ApiConfig
+import com.example.fypdraft.core.config.AppConfig
+import com.example.fypdraft.core.network.NetworkModule
 import com.example.fypdraft.data.api.ChatGPTRequest
 import com.example.fypdraft.data.api.OpenAIMessage
 import com.example.fypdraft.model.ChatMessageUi
@@ -13,128 +13,96 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.tasks.await
 
-class ChatGPTRepository {
+class ChatRepository {
 
-    private val TAG = "ChatGPTRepository"
+    private val TAG = "ChatRepository"
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
-
-    // In-memory conversation history for context (last 20 messages)
     private val conversationHistory = mutableListOf<OpenAIMessage>()
 
-    // ── Send message to OpenAI ────────────────────────────────────────────────
+    // ── Send message to OpenAI ────────────────────────────────────────────
 
     suspend fun sendMessage(userMessage: String): Result<Pair<String, List<SongRecommendation>>> {
         return try {
-            // Add user turn to history
             conversationHistory.add(OpenAIMessage(role = "user", content = userMessage))
 
-            // Build messages: system prompt + capped history
-            val messages = mutableListOf(
-                OpenAIMessage(role = "system", content = ApiConfig.OPENAI_SYSTEM_PROMPT)
-            )
-            val slice = if (conversationHistory.size > 20)
-                conversationHistory.takeLast(20) else conversationHistory
-            messages.addAll(slice)
+            val messages = buildList {
+                add(OpenAIMessage(role = "system", content = AppConfig.CHATGPT_SYSTEM_PROMPT))
+                addAll(conversationHistory.takeLast(20))
+            }
 
-            // Call OpenAI via RetrofitClient
-            val response = RetrofitClient.chatGPTApiService.sendMessage(
-                authorization = "Bearer ${ApiConfig.OPENAI_API_KEY}",
+            val response = NetworkModule.chatGPTApi.sendMessage(
+                authorization = "Bearer ${AppConfig.OPENAI_API_KEY}",
                 request = ChatGPTRequest(messages = messages)
             )
 
             if (!response.isSuccessful) {
-                val errBody = response.errorBody()?.string() ?: "Unknown error"
-                Log.e(TAG, "OpenAI error ${response.code()}: $errBody")
+                val err = response.errorBody()?.string() ?: "Unknown error"
+                Log.e(TAG, "OpenAI error ${response.code()}: $err")
                 if (response.code() == 429) return Result.failure(Exception("RATE_LIMIT_EXCEEDED"))
-                return Result.failure(Exception("API error ${response.code()}: $errBody"))
+                return Result.failure(Exception("API error ${response.code()}"))
             }
 
             val aiText = response.body()?.choices?.firstOrNull()?.message?.content
-                ?: return Result.failure(Exception("Empty response from OpenAI"))
+                ?: return Result.failure(Exception("Empty response"))
 
-            // Add assistant turn to history
             conversationHistory.add(OpenAIMessage(role = "assistant", content = aiText))
 
-            // Parse structured song lines out of the response
             val songs = parseSongs(aiText)
-
-            // Show only prose in the chat bubble — remove the 🎵/💭 lines
             val cleanText = stripSongLines(aiText)
-
-            // Save to Firebase (non-blocking)
             saveToFirebase(userMessage, aiText, songs)
 
-            Result.success(Pair(cleanText, songs))
-
+            Result.success(cleanText to songs)
         } catch (e: Exception) {
-            Log.e(TAG, "sendMessage exception", e)
+            Log.e(TAG, "sendMessage failed", e)
             Result.failure(e)
         }
     }
 
-    // ── Parse song recommendations from GPT response ──────────────────────────
-    //
-    // Expected format per song:
-    //   🎵 SONG: Artist Name - Song Title
-    //   💭 REASON: Why it matches
+    // ── Song parsing ──────────────────────────────────────────────────────
 
     private fun parseSongs(text: String): List<SongRecommendation> {
-        val songs = mutableListOf<SongRecommendation>()
-
-        val songPattern   = Regex("""🎵\s*SONG:\s*(.+?)\s*-\s*(.+)""")
+        val songPattern = Regex("""🎵\s*SONG:\s*(.+?)\s*-\s*(.+)""")
         val reasonPattern = Regex("""💭\s*REASON:\s*(.+)""")
 
-        val songMatches   = songPattern.findAll(text).toList()
+        val songMatches = songPattern.findAll(text).toList()
         val reasonMatches = reasonPattern.findAll(text).toList()
 
-        songMatches.forEachIndexed { i, match ->
-            val artist = match.groupValues[1].trim()
-            val title  = match.groupValues[2].trim()
-            val reason = reasonMatches.getOrNull(i)?.groupValues?.get(1)?.trim() ?: ""
-            if (artist.isNotEmpty() && title.isNotEmpty()) {
-                songs.add(SongRecommendation(artist = artist, title = title, reason = reason))
+        if (songMatches.isNotEmpty()) {
+            return songMatches.mapIndexedNotNull { i, match ->
+                val artist = match.groupValues[1].trim()
+                val title = match.groupValues[2].trim()
+                val reason = reasonMatches.getOrNull(i)?.groupValues?.get(1)?.trim() ?: ""
+                if (artist.isNotEmpty() && title.isNotEmpty())
+                    SongRecommendation(artist = artist, title = title, reason = reason)
+                else null
             }
         }
 
-        // Fallback: try "Artist - Title" lines if primary markers are missing
-        if (songs.isEmpty()) {
-            val fallback = Regex("""^([^-\n]{2,50})\s*-\s*([^-\n]{2,80})$""", RegexOption.MULTILINE)
-            fallback.findAll(text).take(5).forEach { m ->
+        // Fallback: "Artist - Title" lines
+        return Regex("""^([^-\n]{2,50})\s*-\s*([^-\n]{2,80})$""", RegexOption.MULTILINE)
+            .findAll(text).take(5).mapNotNull { m ->
                 val artist = m.groupValues[1].trim()
-                val title  = m.groupValues[2].trim()
-                if (artist.isNotEmpty() && title.isNotEmpty()) {
-                    songs.add(SongRecommendation(artist = artist, title = title))
-                }
-            }
-        }
-
-        Log.d(TAG, "Parsed ${songs.size} songs")
-        return songs
+                val title = m.groupValues[2].trim()
+                if (artist.isNotEmpty() && title.isNotEmpty())
+                    SongRecommendation(artist = artist, title = title)
+                else null
+            }.toList()
     }
 
-    // Remove the formatted song lines so only prose remains in the chat bubble
     private fun stripSongLines(text: String): String =
         text.lines()
-            .filter { line ->
-                !line.trimStart().startsWith("🎵") &&
-                        !line.trimStart().startsWith("💭")
-            }
-            .joinToString("\n")
-            .trim()
+            .filter { !it.trimStart().startsWith("🎵") && !it.trimStart().startsWith("💭") }
+            .joinToString("\n").trim()
 
-    // ── Firebase: save exchange ───────────────────────────────────────────────
+    // ── Firebase persistence ──────────────────────────────────────────────
 
-    private fun saveToFirebase(
-        userMessage: String,
-        aiResponse: String,
-        songs: List<SongRecommendation>
-    ) {
+    private fun saveToFirebase(userMsg: String, aiResp: String, songs: List<SongRecommendation>) {
         val userId = auth.currentUser?.uid ?: return
         val data = hashMapOf(
-            "userId"          to userId,
-            "userMessage"     to userMessage,
-            "aiResponse"      to aiResponse,
+            "userId" to userId,
+            "userMessage" to userMsg,
+            "aiResponse" to aiResp,
             "recommendations" to songs.map {
                 mapOf("artist" to it.artist, "title" to it.title, "reason" to it.reason)
             },
@@ -144,12 +112,9 @@ class ChatGPTRepository {
             .document(userId)
             .collection("messages")
             .add(data)
-            .addOnFailureListener { e -> Log.e(TAG, "Firebase save failed", e) }
     }
 
-    // ── Firebase: load history on app start ───────────────────────────────────
-
-    suspend fun loadConversationHistory(): List<ChatMessageUi> {
+    suspend fun loadHistory(): List<ChatMessageUi> {
         val userId = auth.currentUser?.uid ?: return emptyList()
         return try {
             val snapshot = firestore
@@ -159,36 +124,35 @@ class ChatGPTRepository {
                 .limit(50)
                 .get().await()
 
-            val uiMessages = mutableListOf<ChatMessageUi>()
-            snapshot.documents.forEach { doc ->
-                val userMsg = doc.getString("userMessage") ?: return@forEach
-                val aiMsg   = doc.getString("aiResponse")  ?: return@forEach
+            conversationHistory.clear()
+
+            snapshot.documents.flatMap { doc ->
+                val userMsg = doc.getString("userMessage") ?: return@flatMap emptyList()
+                val aiMsg = doc.getString("aiResponse") ?: return@flatMap emptyList()
 
                 @Suppress("UNCHECKED_CAST")
                 val rawSongs = doc.get("recommendations") as? List<Map<String, String>> ?: emptyList()
                 val songs = rawSongs.map {
                     SongRecommendation(
                         artist = it["artist"] ?: "",
-                        title  = it["title"]  ?: "",
+                        title = it["title"] ?: "",
                         reason = it["reason"] ?: ""
                     )
                 }
 
-                uiMessages.add(ChatMessageUi(sender = MessageSender.USER, text = userMsg))
-                uiMessages.add(ChatMessageUi(sender = MessageSender.AI,   text = stripSongLines(aiMsg), songs = songs))
-
-                // Rebuild in-memory history for context continuity
-                conversationHistory.add(OpenAIMessage("user",      userMsg))
+                conversationHistory.add(OpenAIMessage("user", userMsg))
                 conversationHistory.add(OpenAIMessage("assistant", aiMsg))
+
+                listOf(
+                    ChatMessageUi(sender = MessageSender.USER, text = userMsg),
+                    ChatMessageUi(sender = MessageSender.AI, text = stripSongLines(aiMsg), songs = songs)
+                )
             }
-            uiMessages
         } catch (e: Exception) {
-            Log.e(TAG, "loadConversationHistory failed", e)
+            Log.e(TAG, "loadHistory failed", e)
             emptyList()
         }
     }
-
-    // ── Firebase: clear conversation ──────────────────────────────────────────
 
     suspend fun clearConversation() {
         val userId = auth.currentUser?.uid ?: return
