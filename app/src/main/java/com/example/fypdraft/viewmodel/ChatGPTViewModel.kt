@@ -3,8 +3,8 @@ package com.example.fypdraft.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.fypdraft.data.repository.ChatGPTRepository
-import com.example.fypdraft.data.repository.YouTubeMusicRepository
+import com.example.fypdraft.data.repository.ChatRepository
+import com.example.fypdraft.data.repository.YouTubeRepository
 import com.example.fypdraft.model.ChatMessageUi
 import com.example.fypdraft.model.ChatUiState
 import com.example.fypdraft.model.MessageSender
@@ -19,10 +19,8 @@ import kotlinx.coroutines.launch
 class ChatGPTViewModel : ViewModel() {
 
     private val TAG = "ChatGPTViewModel"
-    private val chatRepo    = ChatGPTRepository()
-    private val youtubeRepo = YouTubeMusicRepository()
-
-    // ── Exposed state ─────────────────────────────────────────────────────────
+    private val chatRepo    = ChatRepository()
+    private val youtubeRepo = YouTubeRepository()
 
     private val _messages = MutableStateFlow<List<ChatMessageUi>>(emptyList())
     val messages: StateFlow<List<ChatMessageUi>> = _messages.asStateFlow()
@@ -33,16 +31,12 @@ class ChatGPTViewModel : ViewModel() {
     private val _uiState = MutableStateFlow<ChatUiState>(ChatUiState.Idle)
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
-    // ── Init: restore previous chat ───────────────────────────────────────────
-
     init {
         viewModelScope.launch {
-            val history = chatRepo.loadConversationHistory()
+            val history = chatRepo.loadHistory()
             if (history.isNotEmpty()) _messages.value = history
         }
     }
-
-    // ── Send a message ────────────────────────────────────────────────────────
 
     fun sendMessage(userText: String) {
         if (userText.isBlank()) return
@@ -56,9 +50,7 @@ class ChatGPTViewModel : ViewModel() {
             chatRepo.sendMessage(userText.trim()).fold(
                 onSuccess = { (aiText, songs) ->
                     _typingState.value = TypingState.FindingSongs
-
                     val enrichedSongs = enrichWithYoutube(songs)
-
                     _typingState.value = TypingState.FilteringResponse
 
                     addMessage(
@@ -97,10 +89,6 @@ class ChatGPTViewModel : ViewModel() {
         }
     }
 
-    // ── YouTube enrichment ────────────────────────────────────────────────────
-    // Builds a minimal Track so YouTubeMusicRepository can do the search.
-    // albumArtUrl is required (non-nullable) by the Track data class → pass "".
-
     private suspend fun enrichWithYoutube(songs: List<SongRecommendation>): List<SongRecommendation> {
         return songs.map { song ->
             try {
@@ -108,11 +96,11 @@ class ChatGPTViewModel : ViewModel() {
                     id = "${song.artist}-${song.title}",
                     name = song.title,
                     artist = song.artist,
-                    albumArtUrl = "",      // ← required field; no art available from ChatGPT alone
+                    albumArtUrl = "",
                     previewUrl = null,
                     durationMs = 0L
                 )
-                val videoId = youtubeRepo.getYouTubeVideoId(fakeTrack)
+                val videoId = youtubeRepo.getVideoId(fakeTrack)
                 song.copy(youtubeVideoId = videoId)
             } catch (e: Exception) {
                 Log.w(TAG, "YouTube lookup failed for ${song.artist} - ${song.title}")
@@ -121,16 +109,12 @@ class ChatGPTViewModel : ViewModel() {
         }
     }
 
-    // ── Edit a message and regenerate ─────────────────────────────────────────
-
     fun editMessage(messageIndex: Int, newText: String) {
         viewModelScope.launch {
             _messages.value = _messages.value.take(messageIndex)
             sendMessage(newText)
         }
     }
-
-    // ── Clear conversation ────────────────────────────────────────────────────
 
     fun clearConversation() {
         viewModelScope.launch {
@@ -142,8 +126,6 @@ class ChatGPTViewModel : ViewModel() {
     fun dismissError() {
         _uiState.value = ChatUiState.Idle
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun addMessage(msg: ChatMessageUi) {
         _messages.value = _messages.value + msg

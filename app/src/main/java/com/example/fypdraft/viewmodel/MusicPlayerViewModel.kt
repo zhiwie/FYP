@@ -12,7 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.fypdraft.data.repository.YouTubeMusicRepository
+import com.example.fypdraft.data.repository.YouTubeRepository
 import com.example.fypdraft.ml.*
 import com.example.fypdraft.model.AIResponse
 import com.example.fypdraft.model.PlayerState
@@ -33,15 +33,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     private val TAG = "MusicPlayerViewModel"
 
-    private val youtubeRepository = YouTubeMusicRepository()
+    private val youtubeRepository = YouTubeRepository()
     private var mediaPlayer: MediaPlayer? = null
     private var recommendationEngine: MusicRecommendationEngine? = null
 
-    // ── Firebase ──────────────────────────────────────────────────────────────
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
 
-    // ── Service binding ───────────────────────────────────────────────────────
     private var musicService: MusicPlayerService? = null
     private var serviceBound = false
 
@@ -95,8 +93,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         )
     }
 
-    // ── State flows ───────────────────────────────────────────────────────────
-
     private val _mlReady = MutableStateFlow(false)
     val mlReady: StateFlow<Boolean> = _mlReady.asStateFlow()
 
@@ -111,8 +107,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _aiError = MutableStateFlow<String?>(null)
     val aiError: StateFlow<String?> = _aiError.asStateFlow()
-
-    // ── ML init ───────────────────────────────────────────────────────────────
 
     fun initializeMLModels() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -132,8 +126,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
     }
-
-    // ── Firebase: save playback history ──────────────────────────────────────
 
     private fun savePlaybackHistory(track: Track) {
         val userId = auth.currentUser?.uid ?: run {
@@ -159,8 +151,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 Log.e(TAG, "❌ Failed to save playback history", e)
             }
     }
-
-    // ── TFLite recommendation ─────────────────────────────────────────────────
 
     fun processUserMessageWithAI(
         message: String,
@@ -192,8 +182,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                         intentConfidence = ((result.intentResult?.confidence ?: 0f) * 100).toInt(),
                         intentEmoji = getIntentEmoji(result.intentResult?.topIntent),
                         currentSongEmotion = result.emotionResult?.topEmotion,
-                        emotionConfidence = ((result.emotionResult?.confidence
-                            ?: 0f) * 100).toInt(),
+                        emotionConfidence = ((result.emotionResult?.confidence ?: 0f) * 100).toInt(),
                         emotionEmoji = result.emotionResult?.emoji,
                         explanation = result.explanation.text,
                         overallConfidence = result.explanation.confidence,
@@ -275,7 +264,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         )
 
         viewModelScope.launch {
-            val videoId = youtubeRepository.getYouTubeVideoId(track)
+            val videoId = youtubeRepository.getVideoId(track)
             _playerState.value = _playerState.value.copy(
                 youtubeVideoId      = videoId,
                 isLoadingVideo      = false,
@@ -311,7 +300,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
         if (knownVideoId == null) {
             viewModelScope.launch {
-                val videoId = youtubeRepository.getYouTubeVideoId(track)
+                val videoId = youtubeRepository.getVideoId(track)
                 _playerState.value = _playerState.value.copy(
                     youtubeVideoId      = videoId,
                     isLoadingVideo      = false,
@@ -400,15 +389,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // ── Notification command channel (collected by MusicPlayerScreen) ─────────
     private val _notificationCommand = MutableStateFlow<String?>(null)
     val notificationCommand: StateFlow<String?> = _notificationCommand.asStateFlow()
 
     fun clearNotificationCommand() {
         _notificationCommand.value = null
     }
-
-    // ── FIX: play() and pause() now log state and handle Deezer more robustly ──
 
     fun play() {
         val state = _playerState.value
@@ -434,7 +420,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     ?: Log.w(TAG, "No preview URL available")
             }
         } else {
-            // YouTube path — update state, emit command for WebView
             _playerState.value = state.copy(isPlaying = true)
             _notificationCommand.value = MusicPlayerService.ACTION_PLAY
             state.currentTrack?.let { updateNotification(it, true) }
@@ -466,7 +451,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun playNext() {
-        val state     = _playerState.value
+        val state = _playerState.value
         Log.d(TAG, "⏭ playNext() called — index=${state.currentIndex}, playlistSize=${state.playlist.size}")
         val nextIndex = state.currentIndex + 1
         if (nextIndex < state.playlist.size) {
@@ -477,7 +462,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun playPrevious() {
-        val state         = _playerState.value
+        val state = _playerState.value
         Log.d(TAG, "⏮ playPrevious() called — index=${state.currentIndex}")
         val previousIndex = state.currentIndex - 1
         if (previousIndex >= 0) {
@@ -493,8 +478,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             _playerState.value = _playerState.value.copy(progress = progress)
         }
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun getSongUri(track: Track): Uri = Uri.parse(track.previewUrl ?: "")
 
@@ -530,8 +513,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         "comfort"  -> listOf("Allow yourself to feel emotions", "Music can be therapeutic", "Reach out to someone if you need support")
         else       -> listOf("Discover new music based on your mood", "Create playlists for different feelings", "Let music enhance your day")
     }
-
-    // ── Cleanup ───────────────────────────────────────────────────────────────
 
     fun cleanupMLModels() {
         viewModelScope.launch(Dispatchers.IO) {

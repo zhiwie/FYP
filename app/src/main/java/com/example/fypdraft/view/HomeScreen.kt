@@ -24,7 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.fypdraft.data.repository.DeezerRepository
+import com.example.fypdraft.data.repository.MusicSearchRepository
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.model.Track
 import kotlinx.coroutines.CoroutineScope
@@ -44,18 +44,16 @@ fun HomeScreen(
     onNavigateToLibrary: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
     onNavigateToSpotify: () -> Unit = {},
-    onNavigateToMusicPlayer: () -> Unit = {},  // ADDED THIS MISSING PARAMETER
+    onNavigateToMusicPlayer: () -> Unit = {},
     onNavigateToEmotionChat: () -> Unit = {},
     onSignOut: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
 
-    // Deezer integration
-    val deezerRepository = remember { DeezerRepository() }
+    val musicSearchRepo = remember { MusicSearchRepository() }
     val scope = rememberCoroutineScope()
 
-    // Real music data from Deezer
     var topTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var similarEnergyTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var liftUpMoodTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
@@ -68,18 +66,12 @@ fun HomeScreen(
         scope.launch {
             try {
                 isLoading = true
-
-                // Load top tracks
-                topTracks = deezerRepository.getTopTracks().take(10)
-
-                // Load mood-based playlists
-                similarEnergyTracks = deezerRepository.getPlaylistByMood("energetic").take(10)
-                liftUpMoodTracks = deezerRepository.getPlaylistByMood("happy").take(10)
-
+                topTracks = musicSearchRepo.getTopTracks().take(10)
+                similarEnergyTracks = musicSearchRepo.getTracksByMood("energetic").take(10)
+                liftUpMoodTracks = musicSearchRepo.getTracksByMood("happy").take(10)
                 isLoading = false
             } catch (e: Exception) {
                 isLoading = false
-                // Handle error silently or show error message
             }
         }
     }
@@ -89,7 +81,7 @@ fun HomeScreen(
         if (searchQuery.length >= 3) {
             scope.launch {
                 isSearching = true
-                searchResults = deezerRepository.searchTracks(searchQuery).take(20)
+                searchResults = musicSearchRepo.searchTracks(searchQuery).take(20)
                 isSearching = false
             }
         } else {
@@ -116,13 +108,11 @@ fun HomeScreen(
     Scaffold(
         bottomBar = {
             Column {
-                // Mini Music Player
                 MiniMusicPlayer(
                     musicPlayerViewModel = musicPlayerViewModel,
                     onNavigateToMusicPlayer = onNavigateToMusicPlayer
                 )
 
-                // Bottom Navigation
                 NavigationBar(containerColor = Color.White) {
                     NavigationBarItem(
                         selected = selectedTab == 0,
@@ -214,7 +204,7 @@ fun HomeScreen(
 
                 Spacer(Modifier.height(20.dp))
 
-                // Show search results if searching
+                // Search results
                 if (searchResults.isNotEmpty()) {
                     Text(
                         text = "Search Results",
@@ -242,7 +232,6 @@ fun HomeScreen(
 
                 Spacer(Modifier.height(24.dp))
 
-                // Show loading indicator
                 if (isLoading) {
                     Box(
                         modifier = Modifier
@@ -261,7 +250,6 @@ fun HomeScreen(
                         }
                     }
                 } else {
-                    // Playlist Recommendations
                     Text(
                         text = "Playlist Recommendation",
                         fontSize = 22.sp,
@@ -354,7 +342,7 @@ fun HomeScreen(
                         items(moodPlaylists) { playlist ->
                             MoodPlaylistCard(
                                 playlist = playlist,
-                                deezerRepository = deezerRepository,
+                                musicSearchRepo = musicSearchRepo,
                                 musicPlayerViewModel = musicPlayerViewModel,
                                 onNavigateToMusicPlayer = onNavigateToMusicPlayer,
                                 scope = scope
@@ -366,7 +354,7 @@ fun HomeScreen(
                 Spacer(Modifier.height(30.dp))
             }
 
-            // Floating Chat Button for AI Emotion Recognition
+            // Floating Chat Button
             FloatingActionButton(
                 onClick = onNavigateToEmotionChat,
                 modifier = Modifier
@@ -374,7 +362,7 @@ fun HomeScreen(
                     .padding(16.dp)
                     .padding(bottom = 140.dp)
                     .size(64.dp),
-                containerColor = Color(0xFF6A5ACD),  // Changed to a nicer purple to stand out
+                containerColor = Color(0xFF6A5ACD),
                 shape = CircleShape
             ) {
                 Column(
@@ -533,7 +521,6 @@ fun MiniMusicPlayer(
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Album art
             Card(
                 modifier = Modifier.size(40.dp),
                 shape = RoundedCornerShape(6.dp)
@@ -588,7 +575,7 @@ fun MiniMusicPlayer(
 @Composable
 fun MoodPlaylistCard(
     playlist: MoodPlaylist,
-    deezerRepository: DeezerRepository,
+    musicSearchRepo: MusicSearchRepository,
     musicPlayerViewModel: MusicPlayerViewModel?,
     onNavigateToMusicPlayer: () -> Unit,
     scope: CoroutineScope
@@ -601,7 +588,7 @@ fun MoodPlaylistCard(
             .clickable {
                 scope.launch {
                     isLoading = true
-                    val tracks = deezerRepository.searchTracks(playlist.searchQuery).take(20)
+                    val tracks = musicSearchRepo.searchTracks(playlist.searchQuery).take(20)
                     if (tracks.isNotEmpty()) {
                         musicPlayerViewModel?.loadTrack(tracks.first(), tracks)
                         musicPlayerViewModel?.play()
