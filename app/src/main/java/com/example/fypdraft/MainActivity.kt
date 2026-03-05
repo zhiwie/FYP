@@ -61,6 +61,9 @@ class MainActivity : ComponentActivity() {
                 MusicPlayerViewModelFactory(application)
             )[MusicPlayerViewModel::class.java]
 
+            // ── Bind the background music notification service ─────────────
+            musicPlayerViewModel.bindMusicService(this)
+
             enableEdgeToEdge()
             setContent {
                 FYPDraftTheme {
@@ -100,7 +103,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try { musicPlayerViewModel.cleanupMLModels() } catch (e: Exception) { }
+        try {
+            // ── Unbind service and clean up ML models ──────────────────────
+            musicPlayerViewModel.unbindMusicService(this)
+            musicPlayerViewModel.cleanupMLModels()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onDestroy", e)
+        }
     }
 }
 
@@ -143,11 +152,6 @@ fun AppInitializer(
 }
 
 // ── Navigation state ──────────────────────────────────────────────────────────
-//
-// Stored as a plain Compose state list so it survives recomposition.
-// We use List<String> + mutableStateOf so that every assignment (=) triggers
-// recomposition reliably — avoiding the removeLast() / dropLast() version
-// mismatch that caused crashes on some Compose versions.
 
 @Composable
 fun MoodSyncApp(
@@ -159,9 +163,6 @@ fun MoodSyncApp(
     val authViewModel:    AuthViewModel    = viewModel()
     val chatGPTViewModel: ChatGPTViewModel = viewModel()
 
-    // Single source of truth: a plain immutable list wrapped in mutableStateOf.
-    // Every navigation op replaces the whole list — no mutation methods needed,
-    // so there is zero risk of hitting missing API methods (removeLast, etc.).
     var backStack by remember {
         val start = try {
             if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.LOGIN
@@ -175,51 +176,33 @@ fun MoodSyncApp(
 
     // ── Navigation helpers ────────────────────────────────────────────────────
 
-    /** Push a new screen. No-op if already on top. */
     fun navigateTo(screen: String) {
         if (backStack.lastOrNull() == screen) return
         backStack = backStack + screen
         Log.d("Nav", "→ $screen   stack=$backStack")
     }
 
-    /** Pop the top screen. If only one screen remains the system handles back. */
     fun navigateBack() {
         if (backStack.size > 1) {
-            backStack = backStack.dropLast(1)   // dropLast is a stdlib function — always available
+            backStack = backStack.dropLast(1)
             Log.d("Nav", "← back   stack=$backStack")
         }
     }
 
-    /**
-     * Replace the entire stack with a single screen.
-     * Used after login / logout so the user cannot press back into auth screens.
-     */
     fun replaceStack(screen: String) {
         backStack = listOf(screen)
         Log.d("Nav", "↺ reset → $screen")
     }
 
-    /**
-     * Bottom-nav tab navigation.
-     *
-     * Tabs are peers — they replace each other, never stack.
-     * Pressing back from any bottom-nav screen exits the app (stack size == 1).
-     */
     fun navigateFromBottomNav(destination: String) {
         if (backStack.lastOrNull() == destination) return
-
-        // Drop any screens that sit above a bottom-nav screen (e.g. MusicPlayer
-        // opened from Settings), then swap the bottom-nav screen for destination.
         val trimmed = backStack.dropLastWhile { it !in Screen.BOTTOM_NAV_SCREENS }
-        // trimmed now ends at a bottom-nav screen (or is empty if none found)
         val base = if (trimmed.isNotEmpty()) trimmed.dropLast(1) else emptyList()
         backStack = base + destination
         Log.d("Nav", "⊡ tab → $destination   stack=$backStack")
     }
 
     // ── Android back button ───────────────────────────────────────────────────
-    // Intercept back only when there is more than one screen on the stack.
-    // When stack size == 1, the system default fires → app exits.
     BackHandler(enabled = backStack.size > 1) {
         navigateBack()
     }
@@ -228,7 +211,6 @@ fun MoodSyncApp(
 
     when (currentScreen) {
 
-        // Auth screens
         Screen.LOGIN -> LoginScreen(
             viewModel        = authViewModel,
             onLoginSuccess   = { replaceStack(Screen.HOME) },
@@ -249,7 +231,6 @@ fun MoodSyncApp(
             onBack         = { navigateBack() }
         )
 
-        // Home — root screen for logged-in users
         Screen.HOME -> HomeScreen(
             musicPlayerViewModel    = musicPlayerViewModel,
             onNavigateToLibrary     = { /* TODO */ },
@@ -263,7 +244,6 @@ fun MoodSyncApp(
             }
         )
 
-        // Bottom-nav peer screens — back exits app
         Screen.SETTINGS -> SettingsScreen(
             onBack    = { navigateBack() },
             onSignOut = {
@@ -277,14 +257,11 @@ fun MoodSyncApp(
             onBack           = { navigateBack() }
         )
 
-        // Full-screen destinations pushed on top of the stack
         Screen.MUSIC_PLAYER -> MusicPlayerScreen(
             viewModel = musicPlayerViewModel,
             onBack    = { navigateBack() }
         )
 
-        // EmotionChat — chat with GPT, song cards push MusicPlayer on top
-        // back: musicplayer → emotionchat → home  ✓
         Screen.EMOTION_CHAT -> EmotionChatScreen(
             chatViewModel = chatGPTViewModel,
             onBack        = { navigateBack() },

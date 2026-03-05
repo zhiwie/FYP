@@ -1,14 +1,19 @@
 package com.example.fypdraft.model
 
 import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.IBinder
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fypdraft.data.repository.YouTubeMusicRepository
 import com.example.fypdraft.ml.*
-// AIResponse is now in com.example.fypdraft.model — no view import needed
+import com.example.fypdraft.service.MusicPlayerService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,22 +25,73 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.Timestamp
 
-/**
- * Unified MusicPlayerViewModel
- * Combines music playback with AI emotion detection and recommendations.
- */
 class MusicPlayerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val TAG = "MusicPlayerViewModel"
 
     private val youtubeRepository = YouTubeMusicRepository()
     private var mediaPlayer: MediaPlayer? = null
-
     private var recommendationEngine: MusicRecommendationEngine? = null
 
     // ── Firebase ──────────────────────────────────────────────────────────────
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
+
+    // ── Service binding ───────────────────────────────────────────────────────
+    private var musicService: MusicPlayerService? = null
+    private var serviceBound = false
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val b = binder as MusicPlayerService.MusicBinder
+            musicService = b.getService()
+            serviceBound = true
+            Log.d(TAG, "✅ MusicPlayerService connected")
+
+            MusicPlayerService.viewModel = this@MusicPlayerViewModel
+
+            _playerState.value.currentTrack?.let { track ->
+                musicService?.updateNotification(
+                    title     = track.name,
+                    artist    = track.artist,
+                    isPlaying = _playerState.value.isPlaying
+                )
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            serviceBound = false
+            musicService = null
+            Log.d(TAG, "MusicPlayerService disconnected")
+        }
+    }
+
+    fun bindMusicService(context: Context) {
+        MusicPlayerService.viewModel = this
+        MusicPlayerService.startService(context)
+        val intent = Intent(context, MusicPlayerService::class.java)
+        context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        Log.d(TAG, "Binding MusicPlayerService...")
+    }
+
+    fun unbindMusicService(context: Context) {
+        if (serviceBound) {
+            context.unbindService(serviceConnection)
+            serviceBound = false
+        }
+        MusicPlayerService.viewModel = null
+        Log.d(TAG, "Unbound MusicPlayerService")
+    }
+
+    private fun updateNotification(track: Track, isPlaying: Boolean) {
+        musicService?.updateNotification(
+            title     = track.name,
+            artist    = track.artist,
+            isPlaying = isPlaying
+        )
+    }
+
+    // ── State flows ───────────────────────────────────────────────────────────
 
     private val _mlReady = MutableStateFlow(false)
     val mlReady: StateFlow<Boolean> = _mlReady.asStateFlow()
@@ -100,8 +156,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             }
     }
 
-    // ── TFLite recommendation (used by the old EmotionChatScreen) ─────────────
-    // AIResponse is now imported from com.example.fypdraft.model (same package)
+    // ── TFLite recommendation ─────────────────────────────────────────────────
 
     fun processUserMessageWithAI(
         message: String,
@@ -199,7 +254,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         val currentIndex  = finalPlaylist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
 
         Log.d(TAG, "Loading track: ${track.name} by ${track.artist}")
-        savePlaybackHistory(track) // ← Save to Firebase
+        savePlaybackHistory(track)
+        updateNotification(track, isPlaying = false)
 
         mediaPlayer?.release()
         mediaPlayer = null
@@ -229,14 +285,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /**
-     * Load a track that already has a known YouTube video ID (from ChatGPT recommendations).
-     * Skips the YouTube search — player starts immediately.
-     * Falls back to normal search if knownVideoId is null.
-     */
     fun loadTrackWithVideoId(track: Track, knownVideoId: String?) {
         Log.d(TAG, "Loading track with video ID: ${track.name} by ${track.artist}")
-        savePlaybackHistory(track) // ← Save to Firebase
+        savePlaybackHistory(track)
+        updateNotification(track, isPlaying = false)
 
         mediaPlayer?.release()
         mediaPlayer = null
@@ -300,6 +352,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                         isPlaying = true,
                         duration  = duration.toLong()
                     )
+                    _playerState.value.currentTrack?.let { updateNotification(it, true) }
                 }
                 setOnErrorListener { _, what, extra ->
                     Log.e(TAG, "MediaPlayer error: what=$what, extra=$extra")
@@ -325,39 +378,107 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         val state = _playerState.value
         if (state.usingDeezerFallback) {
             mediaPlayer?.let { player ->
-                if (state.isPlaying) { player.pause(); _playerState.value = state.copy(isPlaying = false) }
-                else                 { player.start(); _playerState.value = state.copy(isPlaying = true)  }
+                if (state.isPlaying) {
+                    player.pause()
+                    _playerState.value = state.copy(isPlaying = false)
+                    state.currentTrack?.let { updateNotification(it, false) }
+                } else {
+                    player.start()
+                    _playerState.value = state.copy(isPlaying = true)
+                    state.currentTrack?.let { updateNotification(it, true) }
+                }
             }
         } else {
-            _playerState.value = state.copy(isPlaying = !state.isPlaying)
+            val newPlaying = !state.isPlaying
+            _playerState.value = state.copy(isPlaying = newPlaying)
+            state.currentTrack?.let { updateNotification(it, newPlaying) }
         }
     }
 
+    // ── Notification command channel (collected by MusicPlayerScreen) ─────────
+    private val _notificationCommand = MutableStateFlow<String?>(null)
+    val notificationCommand: StateFlow<String?> = _notificationCommand.asStateFlow()
+
+    fun clearNotificationCommand() {
+        _notificationCommand.value = null
+    }
+
+    // ── FIX: play() and pause() now log state and handle Deezer more robustly ──
+
     fun play() {
-        if (_playerState.value.usingDeezerFallback) mediaPlayer?.start()
-        _playerState.value = _playerState.value.copy(isPlaying = true)
+        val state = _playerState.value
+        Log.d(TAG, "▶ play() called — usingDeezer=${state.usingDeezerFallback}, mediaPlayer=${mediaPlayer != null}")
+
+        if (state.usingDeezerFallback) {
+            val player = mediaPlayer
+            if (player != null) {
+                try {
+                    if (!player.isPlaying) {
+                        player.start()
+                    }
+                    _playerState.value = state.copy(isPlaying = true)
+                    state.currentTrack?.let { updateNotification(it, true) }
+                    Log.d(TAG, "▶ Deezer play resumed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "MediaPlayer.start() failed, re-preparing", e)
+                    state.currentTrack?.previewUrl?.let { playDeezerPreview(it) }
+                }
+            } else {
+                Log.d(TAG, "▶ MediaPlayer is null, re-preparing Deezer track")
+                state.currentTrack?.previewUrl?.let { playDeezerPreview(it) }
+                    ?: Log.w(TAG, "No preview URL available")
+            }
+        } else {
+            // YouTube path — update state, emit command for WebView
+            _playerState.value = state.copy(isPlaying = true)
+            _notificationCommand.value = MusicPlayerService.ACTION_PLAY
+            state.currentTrack?.let { updateNotification(it, true) }
+            Log.d(TAG, "▶ YouTube play — emitted notification command")
+        }
     }
 
     fun pause() {
-        if (_playerState.value.usingDeezerFallback) mediaPlayer?.pause()
-        _playerState.value = _playerState.value.copy(isPlaying = false)
+        val state = _playerState.value
+        Log.d(TAG, "⏸ pause() called — usingDeezer=${state.usingDeezerFallback}, mediaPlayer=${mediaPlayer != null}")
+
+        if (state.usingDeezerFallback) {
+            try {
+                if (mediaPlayer?.isPlaying == true) {
+                    mediaPlayer?.pause()
+                }
+                Log.d(TAG, "⏸ Deezer paused")
+            } catch (e: Exception) {
+                Log.e(TAG, "MediaPlayer.pause() failed", e)
+            }
+            _playerState.value = state.copy(isPlaying = false)
+            state.currentTrack?.let { updateNotification(it, false) }
+        } else {
+            _playerState.value = state.copy(isPlaying = false)
+            _notificationCommand.value = MusicPlayerService.ACTION_PAUSE
+            state.currentTrack?.let { updateNotification(it, false) }
+            Log.d(TAG, "⏸ YouTube pause — emitted notification command")
+        }
     }
 
     fun playNext() {
         val state     = _playerState.value
+        Log.d(TAG, "⏭ playNext() called — index=${state.currentIndex}, playlistSize=${state.playlist.size}")
         val nextIndex = state.currentIndex + 1
         if (nextIndex < state.playlist.size) {
             loadTrack(state.playlist[nextIndex], state.playlist)
-            play()
+        } else {
+            Log.d(TAG, "⏭ Already at last track")
         }
     }
 
     fun playPrevious() {
-        val state          = _playerState.value
-        val previousIndex  = state.currentIndex - 1
+        val state         = _playerState.value
+        Log.d(TAG, "⏮ playPrevious() called — index=${state.currentIndex}")
+        val previousIndex = state.currentIndex - 1
         if (previousIndex >= 0) {
             loadTrack(state.playlist[previousIndex], state.playlist)
-            play()
+        } else {
+            Log.d(TAG, "⏮ Already at first track")
         }
     }
 
@@ -422,6 +543,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         super.onCleared()
         mediaPlayer?.release()
         mediaPlayer = null
+        MusicPlayerService.viewModel = null
         cleanupMLModels()
     }
 }
