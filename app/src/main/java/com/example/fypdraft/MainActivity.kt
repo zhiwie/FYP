@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModelProvider
@@ -24,19 +25,10 @@ import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.viewmodel.SpotifyViewModel
 import com.example.fypdraft.model.Track
 import com.example.fypdraft.ui.theme.FYPDraftTheme
-import com.example.fypdraft.view.EmotionChatScreen
-import com.example.fypdraft.view.HomeScreen
-import com.example.fypdraft.view.LoginScreen
-import com.example.fypdraft.view.MusicPlayerScreen
-import com.example.fypdraft.view.ResetPWScreen
-import com.example.fypdraft.view.SettingsScreen
-import com.example.fypdraft.view.SignUpScreen
-import com.example.fypdraft.view.SpotifyConnectionScreen
+import com.example.fypdraft.view.*
 import com.spotify.sdk.android.auth.AuthorizationClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-// ── Screen name constants ─────────────────────────────────────────────────────
 
 object Screen {
     const val LOGIN        = "login"
@@ -47,12 +39,7 @@ object Screen {
     const val SPOTIFY      = "spotify"
     const val MUSIC_PLAYER = "musicplayer"
     const val EMOTION_CHAT = "emotionchat"
-
-    // Bottom nav tabs replace each other instead of stacking
-    val BOTTOM_NAV_SCREENS = setOf(HOME, SETTINGS, SPOTIFY)
 }
-
-// ── Activity ──────────────────────────────────────────────────────────────────
 
 class MainActivity : ComponentActivity() {
 
@@ -68,7 +55,6 @@ class MainActivity : ComponentActivity() {
                 MusicPlayerViewModelFactory(application)
             )[MusicPlayerViewModel::class.java]
 
-            // ── Bind the background music notification service ─────────────
             musicPlayerViewModel.bindMusicService(this)
 
             enableEdgeToEdge()
@@ -111,7 +97,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         try {
-            // ── Unbind service and clean up ML models ──────────────────────
             musicPlayerViewModel.unbindMusicService(this)
             musicPlayerViewModel.cleanupMLModels()
         } catch (e: Exception) {
@@ -119,8 +104,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
-// ── AppInitializer ────────────────────────────────────────────────────────────
 
 @Composable
 fun AppInitializer(
@@ -158,8 +141,6 @@ fun AppInitializer(
     }
 }
 
-// ── Navigation state ──────────────────────────────────────────────────────────
-
 @Composable
 fun MoodSyncApp(
     activity: MainActivity,
@@ -170,79 +151,73 @@ fun MoodSyncApp(
     val authViewModel:    AuthViewModel    = viewModel()
     val chatGPTViewModel: ChatGPTViewModel = viewModel()
 
-    var backStack by remember {
-        val start = try {
+    val startScreen = remember {
+        try {
             if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.LOGIN
         } catch (e: Exception) {
             Screen.LOGIN
         }
-        mutableStateOf(listOf(start))
     }
 
-    val currentScreen = backStack.lastOrNull() ?: Screen.LOGIN
+    var backStack by rememberSaveable { mutableStateOf(listOf(startScreen)) }
+    val currentScreen = backStack.lastOrNull() ?: Screen.HOME
 
-    // ── Navigation helpers ────────────────────────────────────────────────────
+    // ── Navigation helpers ────────────────────────────────────────────────
 
     fun navigateTo(screen: String) {
         if (backStack.lastOrNull() == screen) return
         backStack = backStack + screen
-        Log.d("Nav", "→ $screen   stack=$backStack")
     }
 
-    fun navigateBack() {
-        if (backStack.size > 1) {
-            backStack = backStack.dropLast(1)
-            Log.d("Nav", "← back   stack=$backStack")
-        }
+    fun navigateBack(): Boolean {
+        if (backStack.size <= 1) return false
+        backStack = backStack.dropLast(1)
+        return true
     }
 
     fun replaceStack(screen: String) {
         backStack = listOf(screen)
-        Log.d("Nav", "↺ reset → $screen")
     }
 
     fun navigateFromBottomNav(destination: String) {
         if (backStack.lastOrNull() == destination) return
-        val trimmed = backStack.dropLastWhile { it !in Screen.BOTTOM_NAV_SCREENS }
-        val base = if (trimmed.isNotEmpty()) trimmed.dropLast(1) else emptyList()
-        backStack = base + destination
-        Log.d("Nav", "⊡ tab → $destination   stack=$backStack")
+        // Bottom nav: always keep HOME as base so back goes to HOME
+        backStack = listOf(Screen.HOME, destination)
     }
 
-    // ── Android back button ───────────────────────────────────────────────────
+    // ── Android back button ──────────────────────────────────────────────
     BackHandler(enabled = backStack.size > 1) {
         navigateBack()
     }
 
-    // ── Screen routing ────────────────────────────────────────────────────────
-
+    // ── Instant screen switch — no animation ─────────────────────────────
     when (currentScreen) {
 
         Screen.LOGIN -> LoginScreen(
-            viewModel = authViewModel,
-            onLoginSuccess = { replaceStack(Screen.HOME) },
+            viewModel        = authViewModel,
+            onLoginSuccess   = { replaceStack(Screen.HOME) },
             onForgotPassword = { navigateTo(Screen.RESET) },
-            onCreateAccount = { navigateTo(Screen.SIGNUP) },
-            onTryDemo = { replaceStack(Screen.HOME) }
+            onCreateAccount  = { navigateTo(Screen.SIGNUP) },
+            onTryDemo        = { replaceStack(Screen.HOME) }
         )
 
         Screen.SIGNUP -> SignUpScreen(
-            viewModel = authViewModel,
-            onSignUpSuccess = { navigateBack() },
+            viewModel         = authViewModel,
+            onSignUpSuccess   = { navigateBack() },
             onNavigateToLogin = { navigateBack() }
         )
 
         Screen.RESET -> ResetPWScreen(
-            viewModel = authViewModel,
+            viewModel      = authViewModel,
             onResetSuccess = { navigateBack() },
-            onBack = { navigateBack() }
+            onBack         = { navigateBack() }
         )
 
         Screen.HOME -> HomeScreen(
-            musicPlayerViewModel = musicPlayerViewModel,
-            onNavigateToLibrary = { /* TODO */ },
-            onNavigateToSettings = { navigateFromBottomNav(Screen.SETTINGS) },
-            onNavigateToSpotify = { navigateFromBottomNav(Screen.SPOTIFY) },
+            musicPlayerViewModel    = musicPlayerViewModel,
+            onNavigateToLibrary     = { /* TODO */ },
+            onNavigateToSettings    = { navigateFromBottomNav(Screen.SETTINGS) },
+            onNavigateToSpotify     = { navigateFromBottomNav(Screen.SPOTIFY) },
             onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
             onNavigateToEmotionChat = { navigateTo(Screen.EMOTION_CHAT) },
             onSignOut = {
@@ -252,7 +227,7 @@ fun MoodSyncApp(
         )
 
         Screen.SETTINGS -> SettingsScreen(
-            onBack = { navigateBack() },
+            onBack    = { navigateBack() },
             onSignOut = {
                 authViewModel.signOut()
                 replaceStack(Screen.LOGIN)
@@ -261,25 +236,25 @@ fun MoodSyncApp(
 
         Screen.SPOTIFY -> SpotifyConnectionScreen(
             spotifyViewModel = spotifyViewModel,
-            onBack = { navigateBack() }
+            onBack           = { navigateBack() }
         )
 
         Screen.MUSIC_PLAYER -> MusicPlayerScreen(
             viewModel = musicPlayerViewModel,
-            onBack = { navigateBack() }
+            onBack    = { navigateBack() }
         )
 
         Screen.EMOTION_CHAT -> EmotionChatScreen(
             chatViewModel = chatGPTViewModel,
-            onBack = { navigateBack() },
-            onSongClick = { song ->
+            onBack        = { navigateBack() },
+            onSongClick   = { song ->
                 val track = Track(
-                    id = "${song.artist}-${song.title}",
-                    name = song.title,
-                    artist = song.artist,
+                    id          = "${song.artist}-${song.title}",
+                    name        = song.title,
+                    artist      = song.artist,
                     albumArtUrl = "",
-                    previewUrl = null,
-                    durationMs = 0L
+                    previewUrl  = null,
+                    durationMs  = 0L
                 )
                 musicPlayerViewModel.loadTrackWithVideoId(track, song.youtubeVideoId)
                 navigateTo(Screen.MUSIC_PLAYER)
@@ -287,8 +262,6 @@ fun MoodSyncApp(
         )
     }
 }
-
-// ── Helper screens ────────────────────────────────────────────────────────────
 
 @Composable
 fun LoadingScreen() {
@@ -303,8 +276,6 @@ fun ErrorScreen(errorMessage: String) {
         Text(text = "Error: $errorMessage", color = MaterialTheme.colorScheme.error)
     }
 }
-
-// ── ViewModel factory ─────────────────────────────────────────────────────────
 
 class MusicPlayerViewModelFactory(
     private val application: android.app.Application

@@ -64,7 +64,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         override fun onServiceDisconnected(name: ComponentName?) {
             serviceBound = false
             musicService = null
-            Log.d(TAG, "MusicPlayerService disconnected")
         }
     }
 
@@ -73,7 +72,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         MusicPlayerService.startService(context)
         val intent = Intent(context, MusicPlayerService::class.java)
         context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-        Log.d(TAG, "Binding MusicPlayerService...")
     }
 
     fun unbindMusicService(context: Context) {
@@ -82,7 +80,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             serviceBound = false
         }
         MusicPlayerService.viewModel = null
-        Log.d(TAG, "Unbound MusicPlayerService")
     }
 
     private fun updateNotification(track: Track, isPlaying: Boolean) {
@@ -92,6 +89,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             isPlaying = isPlaying
         )
     }
+
+    // ── State flows ──────────────────────────────────────────────────────
 
     private val _mlReady = MutableStateFlow(false)
     val mlReady: StateFlow<Boolean> = _mlReady.asStateFlow()
@@ -108,14 +107,14 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private val _aiError = MutableStateFlow<String?>(null)
     val aiError: StateFlow<String?> = _aiError.asStateFlow()
 
+    // ── ML init ──────────────────────────────────────────────────────────
+
     fun initializeMLModels() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.d(TAG, "🚀 Initializing ML Recommendation Engine...")
                 recommendationEngine = MusicRecommendationEngine(getApplication())
                 withContext(Dispatchers.Main) {
                     _mlReady.value = true
-                    Log.d(TAG, "✅ ML models ready!")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Failed to initialize ML models", e)
@@ -127,11 +126,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    // ── Firebase ─────────────────────────────────────────────────────────
+
     private fun savePlaybackHistory(track: Track) {
-        val userId = auth.currentUser?.uid ?: run {
-            Log.w(TAG, "⚠️ Cannot save playback history — user not logged in")
-            return
-        }
+        val userId = auth.currentUser?.uid ?: return
         val data = hashMapOf(
             "userId"    to userId,
             "title"     to track.name,
@@ -144,13 +142,9 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             .document(userId)
             .collection("tracks")
             .add(data)
-            .addOnSuccessListener {
-                Log.d(TAG, "✅ Playback history saved: ${track.name} by ${track.artist}")
-            }
-            .addOnFailureListener { e ->
-                Log.e(TAG, "❌ Failed to save playback history", e)
-            }
     }
+
+    // ── TFLite recommendation ────────────────────────────────────────────
 
     fun processUserMessageWithAI(
         message: String,
@@ -164,8 +158,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
         viewModelScope.launch {
             try {
-                Log.d(TAG, "🎯 Processing user message: $message")
-
                 val currentState   = _playerState.value
                 val currentSongUri = currentState.currentTrack?.let { getSongUri(it) }
                 val currentSongId  = currentState.currentTrack?.id
@@ -192,15 +184,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                         ),
                         tips = generateTips(result.intentResult?.topIntent)
                     )
-
                     result.emotionResult?.let { _currentSongEmotion.value = it }
-
-                    Log.d(TAG, "✅ AI Response generated successfully")
                     onSuccess(response)
                 } else {
-                    val error = result?.errorMessage ?: "Failed to process message"
-                    Log.w(TAG, "⚠️ AI processing failed: $error")
-                    onError(error)
+                    onError(result?.errorMessage ?: "Failed to process message")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "❌ AI processing error", e)
@@ -218,10 +205,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val uri    = getSongUri(currentTrack)
                 val result = recommendationEngine?.processAudio(uri, currentTrack.id)
-                _currentSongEmotion.value  = result
-                _isAnalyzingEmotion.value  = false
+                _currentSongEmotion.value = result
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Emotion analysis error", e)
+            } finally {
                 _isAnalyzingEmotion.value = false
             }
         }
@@ -241,30 +228,47 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // ── Music player ──────────────────────────────────────────────────────────
+    // ── Music player ─────────────────────────────────────────────────────
 
+    /**
+     * KEY FIX: loadTrack now updates the track info IMMEDIATELY (so the UI
+     * shows the new song name / art right away) but sets isLoadingVideo = true
+     * WITHOUT clearing youtubeVideoId / usingDeezerFallback first.
+     *
+     * The old code created a brand new PlayerState() which blanked everything,
+     * causing the screen to flash the "no track" placeholder for one frame.
+     */
     fun loadTrack(track: Track, playlist: List<Track> = emptyList()) {
         val finalPlaylist = if (playlist.isEmpty()) listOf(track) else playlist
         val currentIndex  = finalPlaylist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
 
-        Log.d(TAG, "Loading track: ${track.name} by ${track.artist}")
+        // Stop current playback immediately
+        stopCurrentPlayback()
+
         savePlaybackHistory(track)
         updateNotification(track, isPlaying = false)
 
-        mediaPlayer?.release()
-        mediaPlayer = null
-
-        _playerState.value = PlayerState(
-            currentTrack = track,
-            isPlaying = false,
-            playlist = finalPlaylist,
-            currentIndex = currentIndex,
-            duration = track.durationMs,
-            isLoadingVideo = true
+        // Update state: show new track info immediately, mark video as loading
+        _playerState.value = _playerState.value.copy(
+            currentTrack        = track,
+            isPlaying           = false,
+            playlist            = finalPlaylist,
+            currentIndex        = currentIndex,
+            duration            = track.durationMs,
+            progress            = 0f,
+            currentPosition     = 0L,
+            isLoadingVideo      = true,
+            youtubeVideoId      = null,
+            usingDeezerFallback = false
         )
 
+        // Clear previous song's emotion
+        _currentSongEmotion.value = null
+
+        // Resolve playback source in background
         viewModelScope.launch {
             val videoId = youtubeRepository.getVideoId(track)
+
             _playerState.value = _playerState.value.copy(
                 youtubeVideoId      = videoId,
                 isLoadingVideo      = false,
@@ -280,23 +284,24 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun loadTrackWithVideoId(track: Track, knownVideoId: String?) {
-        Log.d(TAG, "Loading track with video ID: ${track.name} by ${track.artist}")
+        stopCurrentPlayback()
         savePlaybackHistory(track)
         updateNotification(track, isPlaying = false)
 
-        mediaPlayer?.release()
-        mediaPlayer = null
-
-        _playerState.value = PlayerState(
-            currentTrack = track,
-            isPlaying = false,
-            playlist = listOf(track),
-            currentIndex = 0,
-            duration = track.durationMs,
-            youtubeVideoId = knownVideoId,
-            isLoadingVideo = knownVideoId == null,
+        _playerState.value = _playerState.value.copy(
+            currentTrack        = track,
+            isPlaying           = false,
+            playlist            = listOf(track),
+            currentIndex        = 0,
+            duration            = track.durationMs,
+            progress            = 0f,
+            currentPosition     = 0L,
+            youtubeVideoId      = knownVideoId,
+            isLoadingVideo      = knownVideoId == null,
             usingDeezerFallback = false
         )
+
+        _currentSongEmotion.value = null
 
         if (knownVideoId == null) {
             viewModelScope.launch {
@@ -311,6 +316,19 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
         }
+    }
+
+    /**
+     * Cleanly stop the current MediaPlayer without blanking the UI state.
+     */
+    private fun stopCurrentPlayback() {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaPlayer cleanup error", e)
+        }
+        mediaPlayer = null
     }
 
     fun useDeezerFallback() {
@@ -331,7 +349,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun playDeezerPreview(previewUrl: String) {
         try {
-            mediaPlayer?.release()
+            stopCurrentPlayback()
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
@@ -398,45 +416,33 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun play() {
         val state = _playerState.value
-        Log.d(TAG, "▶ play() called — usingDeezer=${state.usingDeezerFallback}, mediaPlayer=${mediaPlayer != null}")
 
         if (state.usingDeezerFallback) {
             val player = mediaPlayer
             if (player != null) {
                 try {
-                    if (!player.isPlaying) {
-                        player.start()
-                    }
+                    if (!player.isPlaying) player.start()
                     _playerState.value = state.copy(isPlaying = true)
                     state.currentTrack?.let { updateNotification(it, true) }
-                    Log.d(TAG, "▶ Deezer play resumed")
                 } catch (e: Exception) {
-                    Log.e(TAG, "MediaPlayer.start() failed, re-preparing", e)
                     state.currentTrack?.previewUrl?.let { playDeezerPreview(it) }
                 }
             } else {
-                Log.d(TAG, "▶ MediaPlayer is null, re-preparing Deezer track")
                 state.currentTrack?.previewUrl?.let { playDeezerPreview(it) }
-                    ?: Log.w(TAG, "No preview URL available")
             }
         } else {
             _playerState.value = state.copy(isPlaying = true)
             _notificationCommand.value = MusicPlayerService.ACTION_PLAY
             state.currentTrack?.let { updateNotification(it, true) }
-            Log.d(TAG, "▶ YouTube play — emitted notification command")
         }
     }
 
     fun pause() {
         val state = _playerState.value
-        Log.d(TAG, "⏸ pause() called — usingDeezer=${state.usingDeezerFallback}, mediaPlayer=${mediaPlayer != null}")
 
         if (state.usingDeezerFallback) {
             try {
-                if (mediaPlayer?.isPlaying == true) {
-                    mediaPlayer?.pause()
-                }
-                Log.d(TAG, "⏸ Deezer paused")
+                if (mediaPlayer?.isPlaying == true) mediaPlayer?.pause()
             } catch (e: Exception) {
                 Log.e(TAG, "MediaPlayer.pause() failed", e)
             }
@@ -446,29 +452,22 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             _playerState.value = state.copy(isPlaying = false)
             _notificationCommand.value = MusicPlayerService.ACTION_PAUSE
             state.currentTrack?.let { updateNotification(it, false) }
-            Log.d(TAG, "⏸ YouTube pause — emitted notification command")
         }
     }
 
     fun playNext() {
         val state = _playerState.value
-        Log.d(TAG, "⏭ playNext() called — index=${state.currentIndex}, playlistSize=${state.playlist.size}")
         val nextIndex = state.currentIndex + 1
         if (nextIndex < state.playlist.size) {
             loadTrack(state.playlist[nextIndex], state.playlist)
-        } else {
-            Log.d(TAG, "⏭ Already at last track")
         }
     }
 
     fun playPrevious() {
         val state = _playerState.value
-        Log.d(TAG, "⏮ playPrevious() called — index=${state.currentIndex}")
         val previousIndex = state.currentIndex - 1
         if (previousIndex >= 0) {
             loadTrack(state.playlist[previousIndex], state.playlist)
-        } else {
-            Log.d(TAG, "⏮ Already at first track")
         }
     }
 
@@ -478,6 +477,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             _playerState.value = _playerState.value.copy(progress = progress)
         }
     }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
 
     private fun getSongUri(track: Track): Uri = Uri.parse(track.previewUrl ?: "")
 
@@ -518,7 +519,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 recommendationEngine?.close()
-                Log.d(TAG, "🛑 ML resources cleaned up")
             } catch (e: Exception) {
                 Log.e(TAG, "Error cleaning up ML resources", e)
             }
@@ -527,8 +527,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onCleared() {
         super.onCleared()
-        mediaPlayer?.release()
-        mediaPlayer = null
+        stopCurrentPlayback()
         MusicPlayerService.viewModel = null
         cleanupMLModels()
     }
