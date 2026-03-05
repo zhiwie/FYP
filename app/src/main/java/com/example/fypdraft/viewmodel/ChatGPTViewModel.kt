@@ -1,10 +1,16 @@
-package com.example.fypdraft.model
+package com.example.fypdraft.viewmodel
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fypdraft.data.repository.ChatGPTRepository
 import com.example.fypdraft.data.repository.YouTubeMusicRepository
+import com.example.fypdraft.model.ChatMessageUi
+import com.example.fypdraft.model.ChatUiState
+import com.example.fypdraft.model.MessageSender
+import com.example.fypdraft.model.SongRecommendation
+import com.example.fypdraft.model.Track
+import com.example.fypdraft.model.TypingState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,8 +64,8 @@ class ChatGPTViewModel : ViewModel() {
                     addMessage(
                         ChatMessageUi(
                             sender = MessageSender.AI,
-                            text   = aiText,
-                            songs  = enrichedSongs
+                            text = aiText,
+                            songs = enrichedSongs
                         )
                     )
                     _typingState.value = TypingState.Idle
@@ -99,12 +105,12 @@ class ChatGPTViewModel : ViewModel() {
         return songs.map { song ->
             try {
                 val fakeTrack = Track(
-                    id          = "${song.artist}-${song.title}",
-                    name        = song.title,
-                    artist      = song.artist,
+                    id = "${song.artist}-${song.title}",
+                    name = song.title,
+                    artist = song.artist,
                     albumArtUrl = "",      // ← required field; no art available from ChatGPT alone
-                    previewUrl  = null,
-                    durationMs  = 0L
+                    previewUrl = null,
+                    durationMs = 0L
                 )
                 val videoId = youtubeRepo.getYouTubeVideoId(fakeTrack)
                 song.copy(youtubeVideoId = videoId)

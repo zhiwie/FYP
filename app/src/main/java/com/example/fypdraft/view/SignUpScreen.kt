@@ -18,23 +18,14 @@ import androidx.compose.runtime.*
 //import androidx.compose.ui.text.input.KeyboardType
 //import androidx.compose.ui.text.input.PasswordVisualTransformation
 //import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.fypdraft.ui.theme.FYPDraftTheme
 
 //package com.example.fypdraft.ui.screens
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -43,10 +34,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.fypdraft.model.AuthViewModel
+import com.example.fypdraft.viewmodel.AuthViewModel
+import kotlinx.coroutines.delay
 
 @Composable
 fun SignUpScreen(
@@ -72,7 +62,7 @@ fun SignUpScreen(
             snackbarHostState.showSnackbar(it)
             viewModel.clearMessages()
             // After showing success message, navigate to login
-            kotlinx.coroutines.delay(2000)
+            delay(2000)
             onSignUpSuccess()
         }
     }

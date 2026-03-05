@@ -18,13 +18,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.fypdraft.model.AuthViewModel
-import com.example.fypdraft.model.ChatGPTViewModel
-import com.example.fypdraft.model.MusicPlayerViewModel
-import com.example.fypdraft.model.SpotifyViewModel
+import com.example.fypdraft.viewmodel.AuthViewModel
+import com.example.fypdraft.viewmodel.ChatGPTViewModel
+import com.example.fypdraft.viewmodel.MusicPlayerViewModel
+import com.example.fypdraft.viewmodel.SpotifyViewModel
 import com.example.fypdraft.model.Track
 import com.example.fypdraft.ui.theme.FYPDraftTheme
-import com.example.fypdraft.view.*
+import com.example.fypdraft.view.EmotionChatScreen
+import com.example.fypdraft.view.HomeScreen
+import com.example.fypdraft.view.LoginScreen
+import com.example.fypdraft.view.MusicPlayerScreen
+import com.example.fypdraft.view.ResetPWScreen
+import com.example.fypdraft.view.SettingsScreen
+import com.example.fypdraft.view.SignUpScreen
+import com.example.fypdraft.view.SpotifyConnectionScreen
 import com.spotify.sdk.android.auth.AuthorizationClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -212,30 +219,30 @@ fun MoodSyncApp(
     when (currentScreen) {
 
         Screen.LOGIN -> LoginScreen(
-            viewModel        = authViewModel,
-            onLoginSuccess   = { replaceStack(Screen.HOME) },
+            viewModel = authViewModel,
+            onLoginSuccess = { replaceStack(Screen.HOME) },
             onForgotPassword = { navigateTo(Screen.RESET) },
-            onCreateAccount  = { navigateTo(Screen.SIGNUP) },
-            onTryDemo        = { replaceStack(Screen.HOME) }
+            onCreateAccount = { navigateTo(Screen.SIGNUP) },
+            onTryDemo = { replaceStack(Screen.HOME) }
         )
 
         Screen.SIGNUP -> SignUpScreen(
-            viewModel         = authViewModel,
-            onSignUpSuccess   = { navigateBack() },
+            viewModel = authViewModel,
+            onSignUpSuccess = { navigateBack() },
             onNavigateToLogin = { navigateBack() }
         )
 
         Screen.RESET -> ResetPWScreen(
-            viewModel      = authViewModel,
+            viewModel = authViewModel,
             onResetSuccess = { navigateBack() },
-            onBack         = { navigateBack() }
+            onBack = { navigateBack() }
         )
 
         Screen.HOME -> HomeScreen(
-            musicPlayerViewModel    = musicPlayerViewModel,
-            onNavigateToLibrary     = { /* TODO */ },
-            onNavigateToSettings    = { navigateFromBottomNav(Screen.SETTINGS) },
-            onNavigateToSpotify     = { navigateFromBottomNav(Screen.SPOTIFY) },
+            musicPlayerViewModel = musicPlayerViewModel,
+            onNavigateToLibrary = { /* TODO */ },
+            onNavigateToSettings = { navigateFromBottomNav(Screen.SETTINGS) },
+            onNavigateToSpotify = { navigateFromBottomNav(Screen.SPOTIFY) },
             onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
             onNavigateToEmotionChat = { navigateTo(Screen.EMOTION_CHAT) },
             onSignOut = {
@@ -245,7 +252,7 @@ fun MoodSyncApp(
         )
 
         Screen.SETTINGS -> SettingsScreen(
-            onBack    = { navigateBack() },
+            onBack = { navigateBack() },
             onSignOut = {
                 authViewModel.signOut()
                 replaceStack(Screen.LOGIN)
@@ -254,25 +261,25 @@ fun MoodSyncApp(
 
         Screen.SPOTIFY -> SpotifyConnectionScreen(
             spotifyViewModel = spotifyViewModel,
-            onBack           = { navigateBack() }
+            onBack = { navigateBack() }
         )
 
         Screen.MUSIC_PLAYER -> MusicPlayerScreen(
             viewModel = musicPlayerViewModel,
-            onBack    = { navigateBack() }
+            onBack = { navigateBack() }
         )
 
         Screen.EMOTION_CHAT -> EmotionChatScreen(
             chatViewModel = chatGPTViewModel,
-            onBack        = { navigateBack() },
-            onSongClick   = { song ->
+            onBack = { navigateBack() },
+            onSongClick = { song ->
                 val track = Track(
-                    id          = "${song.artist}-${song.title}",
-                    name        = song.title,
-                    artist      = song.artist,
+                    id = "${song.artist}-${song.title}",
+                    name = song.title,
+                    artist = song.artist,
                     albumArtUrl = "",
-                    previewUrl  = null,
-                    durationMs  = 0L
+                    previewUrl = null,
+                    durationMs = 0L
                 )
                 musicPlayerViewModel.loadTrackWithVideoId(track, song.youtubeVideoId)
                 navigateTo(Screen.MUSIC_PLAYER)

@@ -36,7 +36,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.fypdraft.model.AuthViewModel
+import com.example.fypdraft.viewmodel.AuthViewModel
 
 @Composable
 fun LoginScreen(

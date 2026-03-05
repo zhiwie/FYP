@@ -1,10 +1,11 @@
-package com.example.fypdraft.model
+package com.example.fypdraft.viewmodel
 
 import android.app.Application
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.IBinder
@@ -13,6 +14,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fypdraft.data.repository.YouTubeMusicRepository
 import com.example.fypdraft.ml.*
+import com.example.fypdraft.model.AIResponse
+import com.example.fypdraft.model.PlayerState
+import com.example.fypdraft.model.Track
 import com.example.fypdraft.service.MusicPlayerService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -184,15 +188,16 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
                 if (result?.success == true && result.explanation != null) {
                     val response = AIResponse(
-                        intent             = result.intentResult?.topIntent ?: "unknown",
-                        intentConfidence   = ((result.intentResult?.confidence ?: 0f) * 100).toInt(),
-                        intentEmoji        = getIntentEmoji(result.intentResult?.topIntent),
+                        intent = result.intentResult?.topIntent ?: "unknown",
+                        intentConfidence = ((result.intentResult?.confidence ?: 0f) * 100).toInt(),
+                        intentEmoji = getIntentEmoji(result.intentResult?.topIntent),
                         currentSongEmotion = result.emotionResult?.topEmotion,
-                        emotionConfidence  = ((result.emotionResult?.confidence ?: 0f) * 100).toInt(),
-                        emotionEmoji       = result.emotionResult?.emoji,
-                        explanation        = result.explanation.text,
-                        overallConfidence  = result.explanation.confidence,
-                        suggestedAction    = generateSuggestedAction(
+                        emotionConfidence = ((result.emotionResult?.confidence
+                            ?: 0f) * 100).toInt(),
+                        emotionEmoji = result.emotionResult?.emoji,
+                        explanation = result.explanation.text,
+                        overallConfidence = result.explanation.confidence,
+                        suggestedAction = generateSuggestedAction(
                             result.intentResult?.topIntent,
                             result.emotionResult?.topEmotion
                         ),
@@ -261,11 +266,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         mediaPlayer = null
 
         _playerState.value = PlayerState(
-            currentTrack   = track,
-            isPlaying      = false,
-            playlist       = finalPlaylist,
-            currentIndex   = currentIndex,
-            duration       = track.durationMs,
+            currentTrack = track,
+            isPlaying = false,
+            playlist = finalPlaylist,
+            currentIndex = currentIndex,
+            duration = track.durationMs,
             isLoadingVideo = true
         )
 
@@ -294,13 +299,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         mediaPlayer = null
 
         _playerState.value = PlayerState(
-            currentTrack        = track,
-            isPlaying           = false,
-            playlist            = listOf(track),
-            currentIndex        = 0,
-            duration            = track.durationMs,
-            youtubeVideoId      = knownVideoId,
-            isLoadingVideo      = knownVideoId == null,
+            currentTrack = track,
+            isPlaying = false,
+            playlist = listOf(track),
+            currentIndex = 0,
+            duration = track.durationMs,
+            youtubeVideoId = knownVideoId,
+            isLoadingVideo = knownVideoId == null,
             usingDeezerFallback = false
         )
 
@@ -340,9 +345,9 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
                 setAudioAttributes(
-                    android.media.AudioAttributes.Builder()
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
                         .build()
                 )
                 setDataSource(previewUrl)

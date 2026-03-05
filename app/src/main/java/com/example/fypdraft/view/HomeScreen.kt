@@ -25,8 +25,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.fypdraft.data.repository.DeezerRepository
-import com.example.fypdraft.model.MusicPlayerViewModel
+import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.model.Track
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 data class MoodPlaylist(
@@ -590,7 +591,7 @@ fun MoodPlaylistCard(
     deezerRepository: DeezerRepository,
     musicPlayerViewModel: MusicPlayerViewModel?,
     onNavigateToMusicPlayer: () -> Unit,
-    scope: kotlinx.coroutines.CoroutineScope
+    scope: CoroutineScope
 ) {
     var isLoading by remember { mutableStateOf(false) }
 

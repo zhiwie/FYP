@@ -18,7 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.fypdraft.data.repository.MockTrack
-import com.example.fypdraft.model.SpotifyViewModel
+import com.example.fypdraft.viewmodel.SpotifyViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 

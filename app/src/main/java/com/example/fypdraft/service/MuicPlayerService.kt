@@ -20,7 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import com.example.fypdraft.MainActivity
 import com.example.fypdraft.R
-import com.example.fypdraft.model.MusicPlayerViewModel
+import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 
 class MusicPlayerService : Service() {
 

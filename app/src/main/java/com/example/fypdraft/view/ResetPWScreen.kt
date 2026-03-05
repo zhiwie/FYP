@@ -10,10 +10,8 @@ import androidx.compose.runtime.*
 //import androidx.compose.ui.graphics.Brush
 //import androidx.compose.ui.graphics.Color
 //import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.fypdraft.ui.theme.FYPDraftTheme
 
 //package com.example.fypdraft.ui.screens
 
@@ -24,7 +22,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.fypdraft.model.AuthViewModel
+import com.example.fypdraft.viewmodel.AuthViewModel
 import kotlinx.coroutines.delay
 
 @Composable

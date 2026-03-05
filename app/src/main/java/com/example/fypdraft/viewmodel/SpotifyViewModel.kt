@@ -1,4 +1,4 @@
-package com.example.fypdraft.model
+package com.example.fypdraft.viewmodel
 
 import android.app.Activity
 import android.content.Context

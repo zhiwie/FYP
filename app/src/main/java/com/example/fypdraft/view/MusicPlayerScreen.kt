@@ -24,7 +24,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
-import com.example.fypdraft.model.MusicPlayerViewModel
+import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.service.MusicPlayerService
 
 @Composable
