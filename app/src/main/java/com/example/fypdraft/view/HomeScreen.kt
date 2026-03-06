@@ -25,11 +25,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.fypdraft.data.repository.MusicSearchRepository
+import com.example.fypdraft.data.repository.MoodHistoryRepository
+import com.example.fypdraft.data.repository.SpotifyMusicRepository
+import com.example.fypdraft.data.repository.SpotifyRepository
+import com.example.fypdraft.ml.RLRecommendationEngine
+import com.example.fypdraft.ml.RewardEvent
+import com.example.fypdraft.ml.RewardType
 import com.example.fypdraft.model.MascotMood
 import com.example.fypdraft.model.MascotMoodDetector
 import com.example.fypdraft.model.Track
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,6 +43,7 @@ import kotlinx.coroutines.launch
 fun HomeScreen(
     modifier: Modifier = Modifier,
     musicPlayerViewModel: MusicPlayerViewModel? = null,
+    spotifyRepository: SpotifyRepository? = null,
     onNavigateToSearch: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
     onNavigateToLibrary: () -> Unit = {},
@@ -44,99 +51,119 @@ fun HomeScreen(
     onNavigateToSpotify: () -> Unit = {},
     onNavigateToMusicPlayer: () -> Unit = {},
     onNavigateToEmotionChat: () -> Unit = {},
-    onSignOut: () -> Unit = {}
+    onSignOut: () -> Unit = {},
+    currentTab: Int = 0
 ) {
-    val musicSearchRepo = remember { MusicSearchRepository() }
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
+    // Real username from Firebase
+    val currentUser = FirebaseAuth.getInstance().currentUser
+    val displayName = currentUser?.displayName ?: "Friend"
+
+    // Repositories
+    val moodHistoryRepo = remember { MoodHistoryRepository() }
+    val rlEngine = remember { RLRecommendationEngine() }
+    val spotifyMusicRepo = remember(spotifyRepository) {
+        spotifyRepository?.let { SpotifyMusicRepository(it) }
+    }
+
+    // Music data
     var featuredTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var moodTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var topTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isSpotifyConnected by remember { mutableStateOf(false) }
 
+    // Mascot
     var mascotMood by remember { mutableStateOf(MascotMoodDetector.detectMood()) }
     var chatMessage by remember { mutableStateOf<String?>(null) }
     var showMoodPicker by remember { mutableStateOf(false) }
 
-    var selectedTab by remember { mutableStateOf(0) }
-
+    // Load RL state and music
     LaunchedEffect(Unit) {
         scope.launch {
-            try {
-                isLoading = true
-                topTracks = musicSearchRepo.getTopTracks().take(10)
-                featuredTracks = musicSearchRepo.getTracksByMood("trending").take(6)
-                moodTracks = musicSearchRepo.getTracksByMood(mascotMood.mood).take(10)
-                isLoading = false
-            } catch (e: Exception) {
+            rlEngine.loadState()
+            isSpotifyConnected = spotifyRepository?.isAuthenticated() == true
+
+            if (isSpotifyConnected && spotifyMusicRepo != null) {
+                try {
+                    isLoading = true
+
+                    // Get user's top tracks for seeding
+                    val seedIds = spotifyMusicRepo.getUserTopTrackIds()
+
+                    // RL-powered recommendations
+                    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                    val targets = rlEngine.getFeatureTargets(mascotMood.mood, hour)
+                    moodTracks = spotifyMusicRepo.getRecommendations(
+                        featureTargets = targets,
+                        seedTrackIds = seedIds,
+                        limit = 15
+                    )
+
+                    // Featured / new releases
+                    featuredTracks = spotifyMusicRepo.getFeaturedTracks(6)
+
+                    // Top tracks with different seeds
+                    val topTargets = rlEngine.getFeatureTargets("neutral", hour)
+                    topTracks = spotifyMusicRepo.getRecommendations(
+                        featureTargets = topTargets,
+                        seedTrackIds = seedIds.take(2),
+                        seedGenres = listOf("pop", "rock"),
+                        limit = 10
+                    )
+
+                    isLoading = false
+                } catch (e: Exception) {
+                    isLoading = false
+                }
+            } else {
                 isLoading = false
             }
         }
     }
 
+    // Reload recommendations when mood changes
     LaunchedEffect(mascotMood.mood) {
+        if (!isSpotifyConnected || spotifyMusicRepo == null) return@LaunchedEffect
         scope.launch {
             try {
-                moodTracks = musicSearchRepo.getTracksByMood(mascotMood.mood).take(10)
+                val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                val targets = rlEngine.getFeatureTargets(mascotMood.mood, hour)
+                val seedIds = spotifyMusicRepo.getUserTopTrackIds()
+                moodTracks = spotifyMusicRepo.getRecommendations(
+                    featureTargets = targets,
+                    seedTrackIds = seedIds,
+                    limit = 15
+                )
             } catch (_: Exception) {}
         }
     }
 
-    // Profile drawer
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             ProfileDrawerContent(
-                onSettings = {
-                    scope.launch { drawerState.close() }
-                    onNavigateToSettings()
-                },
-                onSpotify = {
-                    scope.launch { drawerState.close() }
-                    onNavigateToSpotify()
-                },
-                onSignOut = {
-                    scope.launch { drawerState.close() }
-                    onSignOut()
-                }
+                displayName = displayName,
+                email = currentUser?.email ?: "",
+                onSettings = { scope.launch { drawerState.close() }; onNavigateToSettings() },
+                onSpotify = { scope.launch { drawerState.close() }; onNavigateToSpotify() },
+                onSignOut = { scope.launch { drawerState.close() }; onSignOut() }
             )
         }
     ) {
         Scaffold(
             bottomBar = {
                 Column {
-                    MiniMusicPlayer(
-                        musicPlayerViewModel = musicPlayerViewModel,
-                        onNavigateToMusicPlayer = onNavigateToMusicPlayer
+                    MiniMusicPlayer(musicPlayerViewModel, onNavigateToMusicPlayer)
+                    BottomNavBar(
+                        currentTab = currentTab,
+                        onHome = { },
+                        onSearch = onNavigateToSearch,
+                        onFriends = onNavigateToFriends,
+                        onLibrary = onNavigateToLibrary
                     )
-
-                    NavigationBar(containerColor = Color.White) {
-                        NavigationBarItem(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            icon = { Icon(Icons.Filled.Home, "Home") },
-                            label = { Text("Home", fontSize = 11.sp) }
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1; onNavigateToSearch() },
-                            icon = { Icon(Icons.Filled.Search, "Search") },
-                            label = { Text("Search", fontSize = 11.sp) }
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == 2,
-                            onClick = { selectedTab = 2; onNavigateToFriends() },
-                            icon = { Icon(Icons.Filled.People, "Friends") },
-                            label = { Text("Friends", fontSize = 11.sp) }
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == 3,
-                            onClick = { selectedTab = 3; onNavigateToLibrary() },
-                            icon = { Icon(Icons.Filled.LibraryMusic, "Library") },
-                            label = { Text("Library", fontSize = 11.sp) }
-                        )
-                    }
                 }
             }
         ) { paddingValues ->
@@ -151,7 +178,7 @@ fun HomeScreen(
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
                 ) {
-                    // Top bar
+                    // Top bar: profile + greeting (no notification bell)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -168,30 +195,60 @@ fun HomeScreen(
                         ) {
                             Icon(Icons.Filled.Person, "Profile", tint = Color.White, modifier = Modifier.size(24.dp))
                         }
-
                         Spacer(Modifier.width(14.dp))
-
                         Column {
                             Text(getTimeGreeting(), fontSize = 14.sp, color = Color.Gray)
-                            Text("Ready to vibe?", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                        }
-
-                        Spacer(Modifier.weight(1f))
-
-                        IconButton(onClick = { }) {
-                            Icon(Icons.Filled.Notifications, "Notifications", tint = Color.Black)
+                            Text("Hey, $displayName!", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                         }
                     }
 
-                    // Mascot widget
+                    // Spotify connection prompt if not connected
+                    if (!isSpotifyConnected) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .clickable { onNavigateToSpotify() },
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1DB954))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("\uD83C\uDFB5", fontSize = 24.sp)
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Connect Spotify", color = Color.White, fontWeight = FontWeight.Bold)
+                                    Text("Get personalized recommendations", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
+                                }
+                                Icon(Icons.Filled.ChevronRight, null, tint = Color.White)
+                            }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                    }
+
+                    // Mascot
                     MascotWidget(
                         mood = mascotMood,
                         chatMessage = chatMessage,
                         onQuickReply = { reply: String ->
-                            if (reply == "yes") {
-                                chatMessage = "Great! Here's some ${mascotMood.mood} tracks for you \uD83C\uDFB6"
-                            } else {
-                                chatMessage = "No worries! Tap me anytime \uD83D\uDE0A"
+                            scope.launch {
+                                if (reply == "yes") {
+                                    chatMessage = "Great! Here are tracks picked just for you \uD83C\uDFB6"
+                                    rlEngine.recordReward(RewardEvent(
+                                        type = RewardType.SUGGESTION_ACCEPTED,
+                                        mood = mascotMood.mood,
+                                        trackFeatures = null
+                                    ))
+                                } else {
+                                    chatMessage = "No worries! Tap me anytime \uD83D\uDE0A"
+                                    rlEngine.recordReward(RewardEvent(
+                                        type = RewardType.SUGGESTION_REJECTED,
+                                        mood = mascotMood.mood,
+                                        trackFeatures = null
+                                    ))
+                                }
                             }
                         },
                         onTapMascot = { onNavigateToEmotionChat() },
@@ -202,49 +259,35 @@ fun HomeScreen(
                     Spacer(Modifier.height(24.dp))
 
                     if (isLoading) {
+                        Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    } else if (!isSpotifyConnected) {
+                        // Show message when not connected
                         Box(
-                            modifier = Modifier.fillMaxWidth().height(200.dp),
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator()
+                            Text(
+                                "Connect Spotify above to see personalized music recommendations",
+                                color = Color.Gray,
+                                fontSize = 14.sp
+                            )
                         }
                     } else {
                         // Featured banner
                         if (featuredTracks.isNotEmpty()) {
-                            Text(
-                                "Featured for you",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black,
-                                modifier = Modifier.padding(horizontal = 20.dp)
-                            )
+                            Text("Featured for you", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(horizontal = 20.dp))
                             Spacer(Modifier.height(12.dp))
-
-                            FeaturedBanner(
-                                track = featuredTracks.first(),
-                                musicPlayerViewModel = musicPlayerViewModel,
-                                allTracks = featuredTracks,
-                                onNavigateToMusicPlayer = onNavigateToMusicPlayer
-                            )
-
+                            FeaturedBanner(featuredTracks.first(), musicPlayerViewModel, featuredTracks, onNavigateToMusicPlayer)
                             Spacer(Modifier.height(24.dp))
                         }
 
-                        // Mood tracks
+                        // RL mood tracks
                         if (moodTracks.isNotEmpty()) {
-                            Text(
-                                "For your ${mascotMood.mood} mood ${mascotMood.emoji}",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black,
-                                modifier = Modifier.padding(horizontal = 20.dp)
-                            )
+                            Text("For your ${mascotMood.mood} mood ${mascotMood.emoji}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(horizontal = 20.dp))
                             Spacer(Modifier.height(12.dp))
-
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 20.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
+                            LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 items(moodTracks) { track ->
                                     SmallTrackCard(track, moodTracks, musicPlayerViewModel, onNavigateToMusicPlayer)
                                 }
@@ -252,27 +295,16 @@ fun HomeScreen(
                             Spacer(Modifier.height(24.dp))
                         }
 
-                        // Top tracks
+                        // Trending
                         if (topTracks.isNotEmpty()) {
-                            Text(
-                                "Trending now \uD83D\uDD25",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black,
-                                modifier = Modifier.padding(horizontal = 20.dp)
-                            )
+                            Text("Trending now \uD83D\uDD25", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(horizontal = 20.dp))
                             Spacer(Modifier.height(12.dp))
-
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 20.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
+                            LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 items(topTracks) { track ->
                                     SmallTrackCard(track, topTracks, musicPlayerViewModel, onNavigateToMusicPlayer)
                                 }
                             }
                         }
-
                         Spacer(Modifier.height(24.dp))
                     }
                 }
@@ -280,79 +312,72 @@ fun HomeScreen(
         }
     }
 
-    // Mood picker dialog
     if (showMoodPicker) {
         MoodPickerDialog(
             currentMood = mascotMood.mood,
             onSelect = { selected: String ->
+                val oldMood = mascotMood.mood
                 mascotMood = MascotMoodDetector.getMoodForKey(selected).copy(isUserOverride = true)
                 chatMessage = null
                 showMoodPicker = false
+
+                // Save to mood history + RL signal
+                moodHistoryRepo.saveMood("User changed mood from $oldMood to $selected")
+                scope.launch {
+                    rlEngine.recordReward(RewardEvent(
+                        type = RewardType.MOOD_OVERRIDE,
+                        mood = oldMood,
+                        trackFeatures = null
+                    ))
+                }
             },
             onDismiss = { showMoodPicker = false }
         )
     }
 }
 
+// ── Shared Bottom Nav Bar (reusable across screens) ──────────────────
+
+@Composable
+fun BottomNavBar(
+    currentTab: Int,
+    onHome: () -> Unit,
+    onSearch: () -> Unit,
+    onFriends: () -> Unit,
+    onLibrary: () -> Unit
+) {
+    NavigationBar(containerColor = Color.White) {
+        NavigationBarItem(selected = currentTab == 0, onClick = onHome,
+            icon = { Icon(Icons.Filled.Home, "Home") }, label = { Text("Home", fontSize = 11.sp) })
+        NavigationBarItem(selected = currentTab == 1, onClick = onSearch,
+            icon = { Icon(Icons.Filled.Search, "Search") }, label = { Text("Search", fontSize = 11.sp) })
+        NavigationBarItem(selected = currentTab == 2, onClick = onFriends,
+            icon = { Icon(Icons.Filled.People, "Friends") }, label = { Text("Friends", fontSize = 11.sp) })
+        NavigationBarItem(selected = currentTab == 3, onClick = onLibrary,
+            icon = { Icon(Icons.Filled.LibraryMusic, "Library") }, label = { Text("Library", fontSize = 11.sp) })
+    }
+}
+
 // ── Featured banner ──────────────────────────────────────────────────
 
 @Composable
-private fun FeaturedBanner(
-    track: Track,
-    musicPlayerViewModel: MusicPlayerViewModel?,
-    allTracks: List<Track>,
-    onNavigateToMusicPlayer: () -> Unit
-) {
+private fun FeaturedBanner(track: Track, vm: MusicPlayerViewModel?, allTracks: List<Track>, onNav: () -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp)
-            .padding(horizontal = 16.dp)
-            .clickable {
-                musicPlayerViewModel?.loadTrack(track, allTracks)
-                musicPlayerViewModel?.play()
-                onNavigateToMusicPlayer()
-            },
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(6.dp)
+        modifier = Modifier.fillMaxWidth().height(180.dp).padding(horizontal = 16.dp)
+            .clickable { vm?.loadTrack(track, allTracks); vm?.play(); onNav() },
+        shape = RoundedCornerShape(20.dp), elevation = CardDefaults.cardElevation(6.dp)
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = track.albumArtUrl,
-                contentDescription = track.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))
-                    )
-            )
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(16.dp)
-            ) {
+        Box(Modifier.fillMaxSize()) {
+            AsyncImage(model = track.albumArtUrl, contentDescription = track.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)))))
+            Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
                 Text(track.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(track.artist, color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp, maxLines = 1)
             }
-            FloatingActionButton(
-                onClick = {
-                    musicPlayerViewModel?.loadTrack(track, allTracks)
-                    musicPlayerViewModel?.play()
-                    onNavigateToMusicPlayer()
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(16.dp)
-                    .size(48.dp),
-                containerColor = Color.White,
-                shape = CircleShape
-            ) {
-                Icon(Icons.Filled.PlayArrow, "Play", tint = Color.Black, modifier = Modifier.size(28.dp))
-            }
+            FloatingActionButton(onClick = { vm?.loadTrack(track, allTracks); vm?.play(); onNav() },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(48.dp),
+                containerColor = Color.White, shape = CircleShape
+            ) { Icon(Icons.Filled.PlayArrow, "Play", tint = Color.Black, modifier = Modifier.size(28.dp)) }
         }
     }
 }
@@ -360,32 +385,10 @@ private fun FeaturedBanner(
 // ── Small track card ─────────────────────────────────────────────────
 
 @Composable
-private fun SmallTrackCard(
-    track: Track,
-    allTracks: List<Track>,
-    musicPlayerViewModel: MusicPlayerViewModel?,
-    onNavigateToMusicPlayer: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .width(130.dp)
-            .clickable {
-                musicPlayerViewModel?.loadTrack(track, allTracks)
-                musicPlayerViewModel?.play()
-                onNavigateToMusicPlayer()
-            }
-    ) {
-        Card(
-            modifier = Modifier.size(130.dp),
-            shape = RoundedCornerShape(14.dp),
-            elevation = CardDefaults.cardElevation(4.dp)
-        ) {
-            AsyncImage(
-                model = track.albumArtUrl,
-                contentDescription = track.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+private fun SmallTrackCard(track: Track, all: List<Track>, vm: MusicPlayerViewModel?, onNav: () -> Unit) {
+    Column(Modifier.width(130.dp).clickable { vm?.loadTrack(track, all); vm?.play(); onNav() }) {
+        Card(Modifier.size(130.dp), shape = RoundedCornerShape(14.dp), elevation = CardDefaults.cardElevation(4.dp)) {
+            AsyncImage(model = track.albumArtUrl, contentDescription = track.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         }
         Spacer(Modifier.height(8.dp))
         Text(track.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -396,40 +399,26 @@ private fun SmallTrackCard(
 // ── Mini music player ────────────────────────────────────────────────
 
 @Composable
-fun MiniMusicPlayer(
-    musicPlayerViewModel: MusicPlayerViewModel?,
-    onNavigateToMusicPlayer: () -> Unit
-) {
-    val playerState = musicPlayerViewModel?.playerState?.collectAsState()
-    val currentTrack = playerState?.value?.currentTrack
+fun MiniMusicPlayer(vm: MusicPlayerViewModel?, onNav: () -> Unit) {
+    val playerState = vm?.playerState?.collectAsState()
+    val track = playerState?.value?.currentTrack ?: return
     val isPlaying = playerState?.value?.isPlaying ?: false
 
-    if (currentTrack == null) return
-
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .clickable { onNavigateToMusicPlayer() },
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E)),
-        shape = RoundedCornerShape(14.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clickable { onNav() },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E)), shape = RoundedCornerShape(14.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Card(modifier = Modifier.size(40.dp), shape = RoundedCornerShape(8.dp)) {
-                AsyncImage(model = currentTrack.albumArtUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Card(Modifier.size(40.dp), shape = RoundedCornerShape(8.dp)) {
+                AsyncImage(model = track.albumArtUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
             Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(currentTrack.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(currentTrack.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Column(Modifier.weight(1f)) {
+                Text(track.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            IconButton(onClick = { musicPlayerViewModel?.togglePlayPause() }) {
-                Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, if (isPlaying) "Pause" else "Play", tint = Color.White)
+            IconButton(onClick = { vm?.togglePlayPause() }) {
+                Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "PlayPause", tint = Color.White)
             }
         }
     }
@@ -438,32 +427,23 @@ fun MiniMusicPlayer(
 // ── Profile drawer ───────────────────────────────────────────────────
 
 @Composable
-private fun ProfileDrawerContent(
-    onSettings: () -> Unit,
-    onSpotify: () -> Unit,
-    onSignOut: () -> Unit
-) {
-    ModalDrawerSheet(modifier = Modifier.width(300.dp), drawerContainerColor = Color.White) {
-        Column(modifier = Modifier.padding(24.dp)) {
+private fun ProfileDrawerContent(displayName: String, email: String, onSettings: () -> Unit, onSpotify: () -> Unit, onSignOut: () -> Unit) {
+    ModalDrawerSheet(Modifier.width(300.dp), drawerContainerColor = Color.White) {
+        Column(Modifier.padding(24.dp)) {
             Spacer(Modifier.height(32.dp))
-            Box(
-                modifier = Modifier.size(72.dp).clip(CircleShape).background(Color(0xFF1A1A2E)),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(Modifier.size(72.dp).clip(CircleShape).background(Color(0xFF1A1A2E)), contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Person, null, tint = Color.White, modifier = Modifier.size(36.dp))
             }
             Spacer(Modifier.height(16.dp))
-            Text("Your Profile", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text("username@email.com", fontSize = 13.sp, color = Color.Gray)
+            Text(displayName, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(email, fontSize = 13.sp, color = Color.Gray)
             Spacer(Modifier.height(32.dp))
             Divider()
             Spacer(Modifier.height(16.dp))
-
             DrawerItem(Icons.Filled.Settings, "Settings", onSettings)
             DrawerItem(Icons.Filled.Link, "Connect Spotify", onSpotify)
             DrawerItem(Icons.Filled.Favorite, "Favorites", onClick = { })
             DrawerItem(Icons.Filled.History, "Mood History", onClick = { })
-
             Spacer(Modifier.weight(1f))
             Divider()
             Spacer(Modifier.height(12.dp))
@@ -474,50 +454,31 @@ private fun ProfileDrawerContent(
 
 @Composable
 private fun DrawerItem(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color = Color.Black) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(16.dp))
         Text(label, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = tint)
     }
 }
 
-// ── Mood picker dialog ───────────────────────────────────────────────
+// ── Mood picker ──────────────────────────────────────────────────────
 
 @Composable
-private fun MoodPickerDialog(
-    currentMood: String,
-    onSelect: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
+private fun MoodPickerDialog(currentMood: String, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("How are you feeling?", fontWeight = FontWeight.Bold) },
         text = {
             Column {
                 MascotMoodDetector.allMoodKeys().forEach { mood ->
-                    val moodData = MascotMoodDetector.getMoodForKey(mood)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(mood) }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(moodData.emoji, fontSize = 24.sp)
+                    val data = MascotMoodDetector.getMoodForKey(mood)
+                    Row(Modifier.fillMaxWidth().clickable { onSelect(mood) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(data.emoji, fontSize = 24.sp)
                         Spacer(Modifier.width(14.dp))
-                        Text(
-                            mood.replaceFirstChar { it.uppercase() },
-                            fontSize = 16.sp,
+                        Text(mood.replaceFirstChar { it.uppercase() }, fontSize = 16.sp,
                             fontWeight = if (mood == currentMood) FontWeight.Bold else FontWeight.Normal,
-                            color = if (mood == currentMood) Color(0xFF6A5ACD) else Color.Black
-                        )
-                        if (mood == currentMood) {
-                            Spacer(Modifier.weight(1f))
-                            Icon(Icons.Filled.Check, null, tint = Color(0xFF6A5ACD), modifier = Modifier.size(20.dp))
-                        }
+                            color = if (mood == currentMood) Color(0xFF6A5ACD) else Color.Black)
+                        if (mood == currentMood) { Spacer(Modifier.weight(1f)); Icon(Icons.Filled.Check, null, tint = Color(0xFF6A5ACD), modifier = Modifier.size(20.dp)) }
                     }
                 }
             }
@@ -527,14 +488,7 @@ private fun MoodPickerDialog(
     )
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
-
 private fun getTimeGreeting(): String {
-    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-    return when (hour) {
-        in 5..11  -> "Good morning"
-        in 12..16 -> "Good afternoon"
-        in 17..20 -> "Good evening"
-        else      -> "Late night vibes"
-    }
+    val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    return when (h) { in 5..11 -> "Good morning"; in 12..16 -> "Good afternoon"; in 17..20 -> "Good evening"; else -> "Late night vibes" }
 }

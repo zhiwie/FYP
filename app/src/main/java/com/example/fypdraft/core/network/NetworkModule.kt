@@ -2,7 +2,6 @@ package com.example.fypdraft.core.network
 
 import com.example.fypdraft.core.config.AppConfig
 import com.example.fypdraft.data.api.ChatGPTApiService
-import com.example.fypdraft.data.api.DeezerApiService
 import com.example.fypdraft.data.api.SpotifyApiService
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -35,10 +34,6 @@ object NetworkModule {
 
     val chatGPTApi: ChatGPTApiService by lazy {
         retrofit(AppConfig.OPENAI_BASE_URL).create(ChatGPTApiService::class.java)
-    }
-
-    val deezerApi: DeezerApiService by lazy {
-        retrofit(AppConfig.DEEZER_BASE_URL).create(DeezerApiService::class.java)
     }
 
     val spotifyApi: SpotifyApiService by lazy {

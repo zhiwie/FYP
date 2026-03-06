@@ -23,6 +23,7 @@ import com.example.fypdraft.viewmodel.AuthViewModel
 import com.example.fypdraft.viewmodel.ChatGPTViewModel
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.viewmodel.SpotifyViewModel
+import com.example.fypdraft.data.repository.SpotifyRepository
 import com.example.fypdraft.model.Track
 import com.example.fypdraft.ui.theme.FYPDraftTheme
 import com.example.fypdraft.view.*
@@ -45,6 +46,15 @@ object Screen {
     const val SPOTIFY       = "spotify"
     const val MUSIC_PLAYER  = "musicplayer"
     const val EMOTION_CHAT  = "emotionchat"
+
+    // Tab index mapping for bottom nav sync
+    fun tabIndex(screen: String): Int = when (screen) {
+        HOME    -> 0
+        SEARCH  -> 1
+        FRIENDS -> 2
+        LIBRARY -> 3
+        else    -> -1
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -53,12 +63,16 @@ class MainActivity : ComponentActivity() {
     var spotifyViewModel: SpotifyViewModel? = null
     private val TAG = "MainActivity"
 
+    // Expose SpotifyRepository for screens that need it
+    val spotifyRepository: SpotifyRepository by lazy {
+        SpotifyRepository(this)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
             musicPlayerViewModel = ViewModelProvider(
-                this,
-                MusicPlayerViewModelFactory(application)
+                this, MusicPlayerViewModelFactory(application)
             )[MusicPlayerViewModel::class.java]
 
             musicPlayerViewModel.bindMusicService(this)
@@ -66,68 +80,41 @@ class MainActivity : ComponentActivity() {
             enableEdgeToEdge()
             setContent {
                 FYPDraftTheme {
-                    Surface(modifier = Modifier.fillMaxSize()) {
-                        AppInitializer(
-                            activity             = this@MainActivity,
-                            musicPlayerViewModel = musicPlayerViewModel
-                        )
+                    Surface(Modifier.fillMaxSize()) {
+                        AppInitializer(this@MainActivity, musicPlayerViewModel)
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in onCreate", e)
-            setContent {
-                FYPDraftTheme {
-                    Surface(modifier = Modifier.fillMaxSize()) {
-                        ErrorScreen("Failed to initialize: ${e.message}")
-                    }
-                }
-            }
+            setContent { FYPDraftTheme { Surface(Modifier.fillMaxSize()) { ErrorScreen("Failed: ${e.message}") } } }
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent) }
 
     @Deprecated("Required for Spotify Auth SDK")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SpotifyViewModel.SPOTIFY_AUTH_REQUEST_CODE) {
-            val response = AuthorizationClient.getResponse(resultCode, data)
-            spotifyViewModel?.handleAuthResult(resultCode, response)
+            spotifyViewModel?.handleAuthResult(resultCode, AuthorizationClient.getResponse(resultCode, data))
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            musicPlayerViewModel.unbindMusicService(this)
-            musicPlayerViewModel.cleanupMLModels()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in onDestroy", e)
-        }
+        try { musicPlayerViewModel.unbindMusicService(this); musicPlayerViewModel.cleanupMLModels() } catch (_: Exception) {}
     }
 }
 
 @Composable
-fun AppInitializer(
-    activity: MainActivity,
-    musicPlayerViewModel: MusicPlayerViewModel
-) {
+fun AppInitializer(activity: MainActivity, musicPlayerViewModel: MusicPlayerViewModel) {
     var isInitialized by remember { mutableStateOf(false) }
-    var initError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         scope.launch {
-            try {
-                musicPlayerViewModel.initializeMLModels()
-                delay(500)
-            } catch (e: Exception) {
-                initError = e.message
-            }
+            try { musicPlayerViewModel.initializeMLModels(); delay(500) } catch (_: Exception) {}
             isInitialized = true
         }
     }
@@ -136,13 +123,12 @@ fun AppInitializer(
         LoadingScreen()
     } else {
         val spotifyViewModel = remember {
-            SpotifyViewModel(activity).also { activity.spotifyViewModel = it }
+            SpotifyViewModel(activity).also {
+                activity.spotifyViewModel = it
+                it.restoreAuthState()
+            }
         }
-        MoodSyncApp(
-            activity             = activity,
-            spotifyViewModel     = spotifyViewModel,
-            musicPlayerViewModel = musicPlayerViewModel
-        )
+        MoodSyncApp(activity, spotifyViewModel, musicPlayerViewModel, activity.spotifyRepository)
     }
 }
 
@@ -150,140 +136,91 @@ fun AppInitializer(
 fun MoodSyncApp(
     activity: MainActivity,
     spotifyViewModel: SpotifyViewModel,
-    musicPlayerViewModel: MusicPlayerViewModel
+    musicPlayerViewModel: MusicPlayerViewModel,
+    spotifyRepository: SpotifyRepository
 ) {
     val authViewModel: AuthViewModel = viewModel()
     val chatGPTViewModel: ChatGPTViewModel = viewModel()
 
     val startScreen = remember {
-        try {
-            if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.WELCOME
-        } catch (e: Exception) {
-            Screen.WELCOME
-        }
+        try { if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.WELCOME } catch (_: Exception) { Screen.WELCOME }
     }
 
     var backStack by rememberSaveable { mutableStateOf(listOf(startScreen)) }
     val currentScreen = backStack.lastOrNull() ?: Screen.HOME
+    val currentTab = Screen.tabIndex(currentScreen)
 
-    fun navigateTo(screen: String) {
-        if (backStack.lastOrNull() == screen) return
-        backStack = backStack + screen
-    }
+    fun navigateTo(s: String) { if (backStack.lastOrNull() != s) backStack = backStack + s }
+    fun navigateBack(): Boolean { if (backStack.size <= 1) return false; backStack = backStack.dropLast(1); return true }
+    fun replaceStack(s: String) { backStack = listOf(s) }
+    fun bottomNav(dest: String) { if (backStack.lastOrNull() != dest) backStack = listOf(Screen.HOME, dest) }
 
-    fun navigateBack(): Boolean {
-        if (backStack.size <= 1) return false
-        backStack = backStack.dropLast(1)
-        return true
-    }
-
-    fun replaceStack(screen: String) {
-        backStack = listOf(screen)
-    }
-
-    fun navigateFromBottomNav(destination: String) {
-        if (backStack.lastOrNull() == destination) return
-        backStack = listOf(Screen.HOME, destination)
-    }
-
-    BackHandler(enabled = backStack.size > 1) {
-        navigateBack()
-    }
+    BackHandler(enabled = backStack.size > 1) { navigateBack() }
 
     when (currentScreen) {
+        Screen.WELCOME -> WelcomeScreen(onSignUp = { navigateTo(Screen.SIGNUP) }, onLogIn = { navigateTo(Screen.LOGIN) })
 
-        Screen.WELCOME -> WelcomeScreen(
-            onSignUp = { navigateTo(Screen.SIGNUP) },
-            onLogIn  = { navigateTo(Screen.LOGIN) }
-        )
+        Screen.LOGIN -> LoginScreen(viewModel = authViewModel, onLoginSuccess = { replaceStack(Screen.HOME) }, onForgotPassword = { navigateTo(Screen.RESET) })
 
-        Screen.LOGIN -> LoginScreen(
-            viewModel        = authViewModel,
-            onLoginSuccess   = { replaceStack(Screen.HOME) },
-            onForgotPassword = { navigateTo(Screen.RESET) }
-        )
+        Screen.SIGNUP -> SignUpScreen(viewModel = authViewModel, onSignUpSuccess = { navigateTo(Screen.NICKNAME) }, onNavigateToLogin = { navigateBack() })
 
-        Screen.SIGNUP -> SignUpScreen(
-            viewModel         = authViewModel,
-            onSignUpSuccess   = { navigateTo(Screen.NICKNAME) },
-            onNavigateToLogin = { navigateBack() }
-        )
+        Screen.NICKNAME -> NicknameScreen(onContinue = { _ -> navigateTo(Screen.CONNECT_MUSIC) })
 
-        Screen.NICKNAME -> NicknameScreen(
-            onContinue = { _ -> navigateTo(Screen.CONNECT_MUSIC) }
-        )
+        Screen.CONNECT_MUSIC -> ConnectMusicScreen(spotifyViewModel = spotifyViewModel, onSkip = { replaceStack(Screen.HOME) }, onConnected = { replaceStack(Screen.HOME) })
 
-        Screen.CONNECT_MUSIC -> ConnectMusicScreen(
-            spotifyViewModel = spotifyViewModel,
-            onSkip           = { replaceStack(Screen.HOME) },
-            onConnected      = { replaceStack(Screen.HOME) }
-        )
-
-        Screen.RESET -> ResetPWScreen(
-            viewModel      = authViewModel,
-            onResetSuccess = { navigateBack() },
-            onBack         = { navigateBack() }
-        )
+        Screen.RESET -> ResetPWScreen(viewModel = authViewModel, onResetSuccess = { navigateBack() }, onBack = { navigateBack() })
 
         Screen.HOME -> HomeScreen(
-            musicPlayerViewModel    = musicPlayerViewModel,
-            onNavigateToSearch      = { navigateFromBottomNav(Screen.SEARCH) },
-            onNavigateToFriends     = { navigateFromBottomNav(Screen.FRIENDS) },
-            onNavigateToLibrary     = { navigateFromBottomNav(Screen.LIBRARY) },
-            onNavigateToSettings    = { navigateTo(Screen.SETTINGS) },
-            onNavigateToSpotify     = { navigateTo(Screen.SPOTIFY) },
+            musicPlayerViewModel = musicPlayerViewModel,
+            spotifyRepository = spotifyRepository,
+            onNavigateToSearch = { bottomNav(Screen.SEARCH) },
+            onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
+            onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
+            onNavigateToSettings = { navigateTo(Screen.SETTINGS) },
+            onNavigateToSpotify = { navigateTo(Screen.SPOTIFY) },
             onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
             onNavigateToEmotionChat = { navigateTo(Screen.EMOTION_CHAT) },
-            onSignOut = {
-                authViewModel.signOut()
-                replaceStack(Screen.WELCOME)
-            }
+            onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) },
+            currentTab = 0
         )
 
         Screen.SEARCH -> SearchScreen(
-            musicPlayerViewModel    = musicPlayerViewModel,
+            musicPlayerViewModel = musicPlayerViewModel,
+            spotifyRepository = spotifyRepository,
             onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
-            onBack                  = { navigateBack() }
+            onNavigateToHome = { navigateBack() },
+            onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
+            onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
+            currentTab = 1
         )
 
         Screen.FRIENDS -> FriendsScreen(
-            onBack = { navigateBack() }
+            onNavigateToHome = { navigateBack() },
+            onNavigateToSearch = { bottomNav(Screen.SEARCH) },
+            onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
+            currentTab = 2
         )
 
         Screen.LIBRARY -> LibraryScreen(
-            onBack = { navigateBack() }
+            musicPlayerViewModel = musicPlayerViewModel,
+            onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
+            onNavigateToHome = { navigateBack() },
+            onNavigateToSearch = { bottomNav(Screen.SEARCH) },
+            onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
+            currentTab = 3
         )
 
-        Screen.SETTINGS -> SettingsScreen(
-            onBack    = { navigateBack() },
-            onSignOut = {
-                authViewModel.signOut()
-                replaceStack(Screen.WELCOME)
-            }
-        )
+        Screen.SETTINGS -> SettingsScreen(onBack = { navigateBack() }, onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) })
 
-        Screen.SPOTIFY -> SpotifyConnectionScreen(
-            spotifyViewModel = spotifyViewModel,
-            onBack           = { navigateBack() }
-        )
+        Screen.SPOTIFY -> SpotifyConnectionScreen(spotifyViewModel = spotifyViewModel, onBack = { navigateBack() })
 
-        Screen.MUSIC_PLAYER -> MusicPlayerScreen(
-            viewModel = musicPlayerViewModel,
-            onBack    = { navigateBack() }
-        )
+        Screen.MUSIC_PLAYER -> MusicPlayerScreen(viewModel = musicPlayerViewModel, onBack = { navigateBack() })
 
         Screen.EMOTION_CHAT -> EmotionChatScreen(
             chatViewModel = chatGPTViewModel,
-            onBack        = { navigateBack() },
-            onSongClick   = { song ->
-                val track = Track(
-                    id          = "${song.artist}-${song.title}",
-                    name        = song.title,
-                    artist      = song.artist,
-                    albumArtUrl = "",
-                    previewUrl  = null,
-                    durationMs  = 0L
-                )
+            onBack = { navigateBack() },
+            onSongClick = { song ->
+                val track = Track(id = "${song.artist}-${song.title}", name = song.title, artist = song.artist, albumArtUrl = "", previewUrl = null, durationMs = 0L)
                 musicPlayerViewModel.loadTrackWithVideoId(track, song.youtubeVideoId)
                 navigateTo(Screen.MUSIC_PLAYER)
             }
@@ -292,27 +229,14 @@ fun MoodSyncApp(
 }
 
 @Composable
-fun LoadingScreen() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
-    }
-}
+fun LoadingScreen() { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
 
 @Composable
-fun ErrorScreen(errorMessage: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text = "Error: $errorMessage", color = MaterialTheme.colorScheme.error)
-    }
-}
+fun ErrorScreen(msg: String) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Error: $msg", color = MaterialTheme.colorScheme.error) } }
 
-class MusicPlayerViewModelFactory(
-    private val application: android.app.Application
-) : ViewModelProvider.Factory {
+class MusicPlayerViewModelFactory(private val app: android.app.Application) : ViewModelProvider.Factory {
     override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(MusicPlayerViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return MusicPlayerViewModel(application) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
+        if (modelClass.isAssignableFrom(MusicPlayerViewModel::class.java)) { @Suppress("UNCHECKED_CAST") return MusicPlayerViewModel(app) as T }
+        throw IllegalArgumentException("Unknown ViewModel")
     }
 }

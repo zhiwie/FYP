@@ -20,7 +20,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.fypdraft.data.repository.MusicSearchRepository
+import com.example.fypdraft.data.repository.SearchHistoryRepository
+import com.example.fypdraft.data.repository.SpotifyMusicRepository
+import com.example.fypdraft.data.repository.SpotifyRepository
 import com.example.fypdraft.model.Track
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import kotlinx.coroutines.launch
@@ -35,15 +37,24 @@ data class MoodCategory(
 @Composable
 fun SearchScreen(
     musicPlayerViewModel: MusicPlayerViewModel? = null,
+    spotifyRepository: SpotifyRepository? = null,
     onNavigateToMusicPlayer: () -> Unit = {},
-    onBack: () -> Unit = {}
+    onNavigateToHome: () -> Unit = {},
+    onNavigateToFriends: () -> Unit = {},
+    onNavigateToLibrary: () -> Unit = {},
+    onBack: () -> Unit = {},
+    currentTab: Int = 1
 ) {
-    val musicSearchRepo = remember { MusicSearchRepository() }
     val scope = rememberCoroutineScope()
+    val searchHistoryRepo = remember { SearchHistoryRepository() }
+    val spotifyMusicRepo = remember(spotifyRepository) {
+        spotifyRepository?.let { SpotifyMusicRepository(it) }
+    }
 
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<Track>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
+    var recentSearches by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val categories = remember {
         listOf(
@@ -56,93 +67,97 @@ fun SearchScreen(
         )
     }
 
+    // Load recent searches
+    LaunchedEffect(Unit) {
+        scope.launch {
+            recentSearches = searchHistoryRepo.getRecentSearches().map { it.query }.distinct().take(8)
+        }
+    }
+
+    // Search as user types
     LaunchedEffect(searchQuery) {
-        if (searchQuery.length >= 2) {
+        if (searchQuery.length >= 2 && spotifyMusicRepo != null) {
             scope.launch {
                 isSearching = true
-                searchResults = musicSearchRepo.searchTracks(searchQuery).take(20)
+                searchResults = spotifyMusicRepo.searchTracks(searchQuery)
                 isSearching = false
+                if (searchQuery.length >= 3) {
+                    searchHistoryRepo.saveSearch(searchQuery)
+                }
             }
         } else {
             searchResults = emptyList()
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF8F8FA))
-    ) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
+    Scaffold(
+        bottomBar = {
+            BottomNavBar(
+                currentTab = currentTab,
+                onHome = onNavigateToHome,
+                onSearch = { },
+                onFriends = onNavigateToFriends,
+                onLibrary = onNavigateToLibrary
+            )
+        }
+    ) { padding ->
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            placeholder = { Text("Search songs, artists, albums...", color = Color.Gray) },
-            leadingIcon = { Icon(Icons.Filled.Search, null, tint = Color.Gray) },
-            trailingIcon = {
-                if (isSearching) {
-                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Filled.Close, "Clear", tint = Color.Gray)
-                    }
-                }
-            },
-            shape = RoundedCornerShape(28.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = Color.White,
-                unfocusedContainerColor = Color.White,
-                focusedBorderColor = Color.LightGray,
-                unfocusedBorderColor = Color.Transparent
-            ),
-            singleLine = true
-        )
+                .fillMaxSize()
+                .background(Color(0xFFF8F8FA))
+                .padding(padding)
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                placeholder = { Text("Search songs, artists, albums...", color = Color.Gray) },
+                leadingIcon = { Icon(Icons.Filled.Search, null, tint = Color.Gray) },
+                trailingIcon = {
+                    if (isSearching) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else if (searchQuery.isNotEmpty()) IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Filled.Close, "Clear", tint = Color.Gray) }
+                },
+                shape = RoundedCornerShape(28.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Color.White, unfocusedContainerColor = Color.White, focusedBorderColor = Color.LightGray, unfocusedBorderColor = Color.Transparent),
+                singleLine = true
+            )
 
-        if (searchResults.isNotEmpty()) {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(searchResults) { track ->
-                    SearchResultItem(
-                        track = track,
-                        onClick = {
+            if (searchResults.isNotEmpty()) {
+                LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(searchResults) { track ->
+                        SearchResultItem(track) {
                             musicPlayerViewModel?.loadTrack(track, searchResults)
                             musicPlayerViewModel?.play()
                             onNavigateToMusicPlayer()
                         }
-                    )
+                    }
                 }
-            }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                item {
-                    Text(
-                        "Browse by mood",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
-                }
-
-                items(categories.chunked(2)) { row ->
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        row.forEach { category ->
-                            MoodCategoryCard(
-                                category = category,
-                                onClick = { searchQuery = category.query },
-                                modifier = Modifier.weight(1f)
-                            )
+            } else {
+                LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Recent searches
+                    if (recentSearches.isNotEmpty()) {
+                        item { Text("Recent", fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                        items(recentSearches) { query ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable { searchQuery = query }.padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.History, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Text(query, fontSize = 15.sp, color = Color.Black)
+                            }
                         }
-                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                        item { Spacer(Modifier.height(16.dp)) }
+                    }
+
+                    item { Text("Browse by mood", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 4.dp)) }
+                    items(categories.chunked(2)) { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                            row.forEach { cat ->
+                                MoodCategoryCard(cat, { searchQuery = cat.query }, Modifier.weight(1f))
+                            }
+                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -152,23 +167,12 @@ fun SearchScreen(
 
 @Composable
 private fun SearchResultItem(track: Track, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Card(modifier = Modifier.size(52.dp), shape = RoundedCornerShape(10.dp)) {
-            AsyncImage(
-                model = track.albumArtUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Card(Modifier.size(52.dp), shape = RoundedCornerShape(10.dp)) {
+            AsyncImage(model = track.albumArtUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         }
         Spacer(Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Column(Modifier.weight(1f)) {
             Text(track.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(track.artist, fontSize = 13.sp, color = Color.Gray, maxLines = 1)
         }
@@ -177,28 +181,10 @@ private fun SearchResultItem(track: Track, onClick: () -> Unit) {
 }
 
 @Composable
-private fun MoodCategoryCard(
-    category: MoodCategory,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier
-            .height(100.dp)
-            .clickable { onClick() },
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.linearGradient(category.colors))
-                .padding(16.dp)
-        ) {
-            Column {
-                Text(category.emoji, fontSize = 28.sp)
-                Spacer(Modifier.weight(1f))
-                Text(category.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            }
+private fun MoodCategoryCard(category: MoodCategory, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Card(modifier.height(100.dp).clickable { onClick() }, shape = RoundedCornerShape(16.dp)) {
+        Box(Modifier.fillMaxSize().background(Brush.linearGradient(category.colors)).padding(16.dp)) {
+            Column { Text(category.emoji, fontSize = 28.sp); Spacer(Modifier.weight(1f)); Text(category.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp) }
         }
     }
 }

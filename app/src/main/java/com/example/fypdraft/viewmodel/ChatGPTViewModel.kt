@@ -4,12 +4,10 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.fypdraft.data.repository.ChatRepository
-import com.example.fypdraft.data.repository.YouTubeRepository
 import com.example.fypdraft.model.ChatMessageUi
 import com.example.fypdraft.model.ChatUiState
 import com.example.fypdraft.model.MessageSender
 import com.example.fypdraft.model.SongRecommendation
-import com.example.fypdraft.model.Track
 import com.example.fypdraft.model.TypingState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,8 +17,7 @@ import kotlinx.coroutines.launch
 class ChatGPTViewModel : ViewModel() {
 
     private val TAG = "ChatGPTViewModel"
-    private val chatRepo    = ChatRepository()
-    private val youtubeRepo = YouTubeRepository()
+    private val chatRepo = ChatRepository()
 
     private val _messages = MutableStateFlow<List<ChatMessageUi>>(emptyList())
     val messages: StateFlow<List<ChatMessageUi>> = _messages.asStateFlow()
@@ -49,15 +46,13 @@ class ChatGPTViewModel : ViewModel() {
 
             chatRepo.sendMessage(userText.trim()).fold(
                 onSuccess = { (aiText, songs) ->
-                    _typingState.value = TypingState.FindingSongs
-                    val enrichedSongs = enrichWithYoutube(songs)
                     _typingState.value = TypingState.FilteringResponse
 
                     addMessage(
                         ChatMessageUi(
                             sender = MessageSender.AI,
                             text = aiText,
-                            songs = enrichedSongs
+                            songs = songs
                         )
                     )
                     _typingState.value = TypingState.Idle
@@ -86,26 +81,6 @@ class ChatGPTViewModel : ViewModel() {
                     addMessage(ChatMessageUi(sender = MessageSender.AI, text = errorMessage))
                 }
             )
-        }
-    }
-
-    private suspend fun enrichWithYoutube(songs: List<SongRecommendation>): List<SongRecommendation> {
-        return songs.map { song ->
-            try {
-                val fakeTrack = Track(
-                    id = "${song.artist}-${song.title}",
-                    name = song.title,
-                    artist = song.artist,
-                    albumArtUrl = "",
-                    previewUrl = null,
-                    durationMs = 0L
-                )
-                val videoId = youtubeRepo.getVideoId(fakeTrack)
-                song.copy(youtubeVideoId = videoId)
-            } catch (e: Exception) {
-                Log.w(TAG, "YouTube lookup failed for ${song.artist} - ${song.title}")
-                song
-            }
         }
     }
 

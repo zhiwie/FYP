@@ -12,7 +12,6 @@ import android.os.IBinder
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.fypdraft.data.repository.YouTubeRepository
 import com.example.fypdraft.ml.*
 import com.example.fypdraft.model.AIResponse
 import com.example.fypdraft.model.PlayerState
@@ -33,7 +32,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     private val TAG = "MusicPlayerViewModel"
 
-    private val youtubeRepository = YouTubeRepository()
     private var mediaPlayer: MediaPlayer? = null
     private var recommendationEngine: MusicRecommendationEngine? = null
 
@@ -230,25 +228,14 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     // ── Music player ─────────────────────────────────────────────────────
 
-    /**
-     * KEY FIX: loadTrack now updates the track info IMMEDIATELY (so the UI
-     * shows the new song name / art right away) but sets isLoadingVideo = true
-     * WITHOUT clearing youtubeVideoId / usingDeezerFallback first.
-     *
-     * The old code created a brand new PlayerState() which blanked everything,
-     * causing the screen to flash the "no track" placeholder for one frame.
-     */
     fun loadTrack(track: Track, playlist: List<Track> = emptyList()) {
         val finalPlaylist = if (playlist.isEmpty()) listOf(track) else playlist
         val currentIndex  = finalPlaylist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
 
-        // Stop current playback immediately
         stopCurrentPlayback()
-
         savePlaybackHistory(track)
         updateNotification(track, isPlaying = false)
 
-        // Update state: show new track info immediately, mark video as loading
         _playerState.value = _playerState.value.copy(
             currentTrack        = track,
             isPlaying           = false,
@@ -257,30 +244,19 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             duration            = track.durationMs,
             progress            = 0f,
             currentPosition     = 0L,
-            isLoadingVideo      = true,
+            isLoadingVideo      = false,
             youtubeVideoId      = null,
             usingDeezerFallback = false
         )
 
-        // Clear previous song's emotion
         _currentSongEmotion.value = null
 
-        // Resolve playback source in background
-        viewModelScope.launch {
-            val videoId = youtubeRepository.getVideoId(track)
-
-            _playerState.value = _playerState.value.copy(
-                youtubeVideoId      = videoId,
-                isLoadingVideo      = false,
-                usingDeezerFallback = videoId == null
-            )
-
-            if (videoId == null && !track.previewUrl.isNullOrEmpty()) {
-                playDeezerPreview(track.previewUrl)
-            }
-
-            if (_mlReady.value) analyzeCurrentSongEmotion()
+        // Play via Deezer preview if available
+        if (!track.previewUrl.isNullOrEmpty()) {
+            playDeezerPreview(track.previewUrl)
         }
+
+        if (_mlReady.value) analyzeCurrentSongEmotion()
     }
 
     fun loadTrackWithVideoId(track: Track, knownVideoId: String?) {
@@ -296,31 +272,18 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             duration            = track.durationMs,
             progress            = 0f,
             currentPosition     = 0L,
-            youtubeVideoId      = knownVideoId,
-            isLoadingVideo      = knownVideoId == null,
+            youtubeVideoId      = null,
+            isLoadingVideo      = false,
             usingDeezerFallback = false
         )
 
         _currentSongEmotion.value = null
 
-        if (knownVideoId == null) {
-            viewModelScope.launch {
-                val videoId = youtubeRepository.getVideoId(track)
-                _playerState.value = _playerState.value.copy(
-                    youtubeVideoId      = videoId,
-                    isLoadingVideo      = false,
-                    usingDeezerFallback = videoId == null
-                )
-                if (videoId == null && !track.previewUrl.isNullOrEmpty()) {
-                    playDeezerPreview(track.previewUrl)
-                }
-            }
+        if (!track.previewUrl.isNullOrEmpty()) {
+            playDeezerPreview(track.previewUrl)
         }
     }
 
-    /**
-     * Cleanly stop the current MediaPlayer without blanking the UI state.
-     */
     private fun stopCurrentPlayback() {
         try {
             mediaPlayer?.stop()
