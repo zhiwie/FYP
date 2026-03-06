@@ -14,39 +14,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.fypdraft.viewmodel.AuthViewModel
-import kotlinx.coroutines.delay
 
 private val DarkNavy = Color(0xFF1A1A2E)
 
 @Composable
-fun ResetPWScreen(
-    modifier: Modifier = Modifier,
-    viewModel: AuthViewModel,
-    onResetSuccess: () -> Unit = {},
-    onBack: () -> Unit = {}
+fun NicknameScreen(
+    onContinue: (String) -> Unit = {}
 ) {
-    var email by remember { mutableStateOf("") }
-
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
-        uiState.errorMessage?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
-        }
-        uiState.successMessage?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
-            delay(2000)
-            onResetSuccess()
-        }
-    }
+    var nickname by remember { mutableStateOf("") }
 
     Box(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .background(Color.White)
             .padding(horizontal = 32.dp)
@@ -79,30 +57,22 @@ fun ResetPWScreen(
             Spacer(Modifier.height(40.dp))
 
             Text(
-                text = "Reset your\npassword.",
+                text = "What should we\ncall you?",
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.Black,
                 lineHeight = 40.sp
             )
 
-            Spacer(Modifier.height(12.dp))
-
-            Text(
-                text = "Enter your email to receive a reset link.",
-                fontSize = 14.sp,
-                color = Color.Gray
-            )
-
-            Spacer(Modifier.height(48.dp))
+            Spacer(Modifier.weight(1f))
 
             OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
+                value = nickname,
+                onValueChange = { nickname = it },
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = {
                     Text(
-                        "Email address",
+                        "Preferred nickname",
                         color = Color.Gray,
                         modifier = Modifier.fillMaxWidth(),
                         textAlign = TextAlign.Center
@@ -115,14 +85,13 @@ fun ResetPWScreen(
                     unfocusedBorderColor = Color.LightGray,
                     focusedContainerColor = Color.White,
                     unfocusedContainerColor = Color.White
-                ),
-                enabled = !uiState.isLoading
+                )
             )
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(24.dp))
 
             Button(
-                onClick = { viewModel.resetPassword(email) },
+                onClick = { onContinue(nickname.trim().ifBlank { "Friend" }) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -130,32 +99,12 @@ fun ResetPWScreen(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = DarkNavy,
                     contentColor = Color.White
-                ),
-                enabled = !uiState.isLoading
+                )
             ) {
-                if (uiState.isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.White)
-                } else {
-                    Text("Send Reset Link", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
+                Text("Let\u2019s Go", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
 
-            Spacer(Modifier.height(24.dp))
-
-            OutlinedButton(
-                onClick = onBack,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(28.dp)
-            ) {
-                Text("Back", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-            }
+            Spacer(Modifier.height(80.dp))
         }
-
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
     }
 }

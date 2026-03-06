@@ -31,14 +31,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 object Screen {
-    const val LOGIN        = "login"
-    const val SIGNUP       = "signup"
-    const val RESET        = "reset"
-    const val HOME         = "home"
-    const val SETTINGS     = "settings"
-    const val SPOTIFY      = "spotify"
-    const val MUSIC_PLAYER = "musicplayer"
-    const val EMOTION_CHAT = "emotionchat"
+    const val WELCOME       = "welcome"
+    const val LOGIN         = "login"
+    const val SIGNUP        = "signup"
+    const val NICKNAME      = "nickname"
+    const val CONNECT_MUSIC = "connect_music"
+    const val RESET         = "reset"
+    const val HOME          = "home"
+    const val SEARCH        = "search"
+    const val FRIENDS       = "friends"
+    const val LIBRARY       = "library"
+    const val SETTINGS      = "settings"
+    const val SPOTIFY       = "spotify"
+    const val MUSIC_PLAYER  = "musicplayer"
+    const val EMOTION_CHAT  = "emotionchat"
 }
 
 class MainActivity : ComponentActivity() {
@@ -69,7 +75,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error in onCreate", e)
+            Log.e(TAG, "Error in onCreate", e)
             setContent {
                 FYPDraftTheme {
                     Surface(modifier = Modifier.fillMaxSize()) {
@@ -111,8 +117,8 @@ fun AppInitializer(
     musicPlayerViewModel: MusicPlayerViewModel
 ) {
     var isInitialized by remember { mutableStateOf(false) }
-    var initError     by remember { mutableStateOf<String?>(null) }
-    val scope         = rememberCoroutineScope()
+    var initError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         scope.launch {
@@ -135,8 +141,7 @@ fun AppInitializer(
         MoodSyncApp(
             activity             = activity,
             spotifyViewModel     = spotifyViewModel,
-            musicPlayerViewModel = musicPlayerViewModel,
-            mlInitError          = initError
+            musicPlayerViewModel = musicPlayerViewModel
         )
     }
 }
@@ -145,24 +150,21 @@ fun AppInitializer(
 fun MoodSyncApp(
     activity: MainActivity,
     spotifyViewModel: SpotifyViewModel,
-    musicPlayerViewModel: MusicPlayerViewModel,
-    mlInitError: String? = null
+    musicPlayerViewModel: MusicPlayerViewModel
 ) {
-    val authViewModel:    AuthViewModel    = viewModel()
+    val authViewModel: AuthViewModel = viewModel()
     val chatGPTViewModel: ChatGPTViewModel = viewModel()
 
     val startScreen = remember {
         try {
-            if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.LOGIN
+            if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.WELCOME
         } catch (e: Exception) {
-            Screen.LOGIN
+            Screen.WELCOME
         }
     }
 
     var backStack by rememberSaveable { mutableStateOf(listOf(startScreen)) }
     val currentScreen = backStack.lastOrNull() ?: Screen.HOME
-
-    // ── Navigation helpers ────────────────────────────────────────────────
 
     fun navigateTo(screen: String) {
         if (backStack.lastOrNull() == screen) return
@@ -181,30 +183,40 @@ fun MoodSyncApp(
 
     fun navigateFromBottomNav(destination: String) {
         if (backStack.lastOrNull() == destination) return
-        // Bottom nav: always keep HOME as base so back goes to HOME
         backStack = listOf(Screen.HOME, destination)
     }
 
-    // ── Android back button ──────────────────────────────────────────────
     BackHandler(enabled = backStack.size > 1) {
         navigateBack()
     }
 
-    // ── Instant screen switch — no animation ─────────────────────────────
     when (currentScreen) {
+
+        Screen.WELCOME -> WelcomeScreen(
+            onSignUp = { navigateTo(Screen.SIGNUP) },
+            onLogIn  = { navigateTo(Screen.LOGIN) }
+        )
 
         Screen.LOGIN -> LoginScreen(
             viewModel        = authViewModel,
             onLoginSuccess   = { replaceStack(Screen.HOME) },
-            onForgotPassword = { navigateTo(Screen.RESET) },
-            onCreateAccount  = { navigateTo(Screen.SIGNUP) },
-            onTryDemo        = { replaceStack(Screen.HOME) }
+            onForgotPassword = { navigateTo(Screen.RESET) }
         )
 
         Screen.SIGNUP -> SignUpScreen(
             viewModel         = authViewModel,
-            onSignUpSuccess   = { navigateBack() },
+            onSignUpSuccess   = { navigateTo(Screen.NICKNAME) },
             onNavigateToLogin = { navigateBack() }
+        )
+
+        Screen.NICKNAME -> NicknameScreen(
+            onContinue = { _ -> navigateTo(Screen.CONNECT_MUSIC) }
+        )
+
+        Screen.CONNECT_MUSIC -> ConnectMusicScreen(
+            spotifyViewModel = spotifyViewModel,
+            onSkip           = { replaceStack(Screen.HOME) },
+            onConnected      = { replaceStack(Screen.HOME) }
         )
 
         Screen.RESET -> ResetPWScreen(
@@ -215,22 +227,38 @@ fun MoodSyncApp(
 
         Screen.HOME -> HomeScreen(
             musicPlayerViewModel    = musicPlayerViewModel,
-            onNavigateToLibrary     = { /* TODO */ },
-            onNavigateToSettings    = { navigateFromBottomNav(Screen.SETTINGS) },
-            onNavigateToSpotify     = { navigateFromBottomNav(Screen.SPOTIFY) },
+            onNavigateToSearch      = { navigateFromBottomNav(Screen.SEARCH) },
+            onNavigateToFriends     = { navigateFromBottomNav(Screen.FRIENDS) },
+            onNavigateToLibrary     = { navigateFromBottomNav(Screen.LIBRARY) },
+            onNavigateToSettings    = { navigateTo(Screen.SETTINGS) },
+            onNavigateToSpotify     = { navigateTo(Screen.SPOTIFY) },
             onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
             onNavigateToEmotionChat = { navigateTo(Screen.EMOTION_CHAT) },
             onSignOut = {
                 authViewModel.signOut()
-                replaceStack(Screen.LOGIN)
+                replaceStack(Screen.WELCOME)
             }
+        )
+
+        Screen.SEARCH -> SearchScreen(
+            musicPlayerViewModel    = musicPlayerViewModel,
+            onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
+            onBack                  = { navigateBack() }
+        )
+
+        Screen.FRIENDS -> FriendsScreen(
+            onBack = { navigateBack() }
+        )
+
+        Screen.LIBRARY -> LibraryScreen(
+            onBack = { navigateBack() }
         )
 
         Screen.SETTINGS -> SettingsScreen(
             onBack    = { navigateBack() },
             onSignOut = {
                 authViewModel.signOut()
-                replaceStack(Screen.LOGIN)
+                replaceStack(Screen.WELCOME)
             }
         )
 
