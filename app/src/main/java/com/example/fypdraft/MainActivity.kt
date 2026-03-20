@@ -47,13 +47,8 @@ object Screen {
     const val MUSIC_PLAYER  = "musicplayer"
     const val EMOTION_CHAT  = "emotionchat"
 
-    // Tab index mapping for bottom nav sync
     fun tabIndex(screen: String): Int = when (screen) {
-        HOME    -> 0
-        SEARCH  -> 1
-        FRIENDS -> 2
-        LIBRARY -> 3
-        else    -> -1
+        HOME -> 0; SEARCH -> 1; FRIENDS -> 2; LIBRARY -> 3; else -> -1
     }
 }
 
@@ -63,9 +58,9 @@ class MainActivity : ComponentActivity() {
     var spotifyViewModel: SpotifyViewModel? = null
     private val TAG = "MainActivity"
 
-    // Expose SpotifyRepository for screens that need it
+    // SINGLETON — shared across all screens
     val spotifyRepository: SpotifyRepository by lazy {
-        SpotifyRepository(this)
+        SpotifyRepository.getInstance(this)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -103,7 +98,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try { musicPlayerViewModel.unbindMusicService(this); musicPlayerViewModel.cleanupMLModels() } catch (_: Exception) {}
+        try {
+            musicPlayerViewModel.disconnectSpotifyPlayback()
+            musicPlayerViewModel.unbindMusicService(this)
+            musicPlayerViewModel.cleanupMLModels()
+        } catch (_: Exception) {}
     }
 }
 
@@ -114,7 +113,13 @@ fun AppInitializer(activity: MainActivity, musicPlayerViewModel: MusicPlayerView
 
     LaunchedEffect(Unit) {
         scope.launch {
-            try { musicPlayerViewModel.initializeMLModels(); delay(500) } catch (_: Exception) {}
+            try {
+                musicPlayerViewModel.initializeMLModels()
+                if (activity.spotifyRepository.isAuthenticated()) {
+                    musicPlayerViewModel.connectSpotifyPlayback(activity)
+                }
+                delay(500)
+            } catch (_: Exception) {}
             isInitialized = true
         }
     }
@@ -157,18 +162,47 @@ fun MoodSyncApp(
 
     BackHandler(enabled = backStack.size > 1) { navigateBack() }
 
+    // Auto-connect Spotify playback after fresh auth
+    val spotifyAuthState by spotifyViewModel.authState.collectAsState()
+    LaunchedEffect(spotifyAuthState.isAuthenticated) {
+        if (spotifyAuthState.isAuthenticated) {
+            musicPlayerViewModel.connectSpotifyPlayback(activity)
+        }
+    }
+
     when (currentScreen) {
-        Screen.WELCOME -> WelcomeScreen(onSignUp = { navigateTo(Screen.SIGNUP) }, onLogIn = { navigateTo(Screen.LOGIN) })
+        Screen.WELCOME -> WelcomeScreen(
+            onSignUp = { navigateTo(Screen.SIGNUP) },
+            onLogIn = { navigateTo(Screen.LOGIN) }
+        )
 
-        Screen.LOGIN -> LoginScreen(viewModel = authViewModel, onLoginSuccess = { replaceStack(Screen.HOME) }, onForgotPassword = { navigateTo(Screen.RESET) })
+        Screen.LOGIN -> LoginScreen(
+            viewModel = authViewModel,
+            onLoginSuccess = { replaceStack(Screen.HOME) },
+            onForgotPassword = { navigateTo(Screen.RESET) }
+        )
 
-        Screen.SIGNUP -> SignUpScreen(viewModel = authViewModel, onSignUpSuccess = { navigateTo(Screen.NICKNAME) }, onNavigateToLogin = { navigateBack() })
+        Screen.SIGNUP -> SignUpScreen(
+            viewModel = authViewModel,
+            onSignUpSuccess = { navigateTo(Screen.NICKNAME) },
+            onNavigateToLogin = { navigateBack() }
+        )
 
-        Screen.NICKNAME -> NicknameScreen(onContinue = { _ -> navigateTo(Screen.CONNECT_MUSIC) })
+        Screen.NICKNAME -> NicknameScreen(
+            onContinue = { _ -> navigateTo(Screen.CONNECT_MUSIC) }
+        )
 
-        Screen.CONNECT_MUSIC -> ConnectMusicScreen(spotifyViewModel = spotifyViewModel, onSkip = { replaceStack(Screen.HOME) }, onConnected = { replaceStack(Screen.HOME) })
+        Screen.CONNECT_MUSIC -> ConnectMusicScreen(
+            spotifyViewModel = spotifyViewModel,
+            onSkip = { replaceStack(Screen.HOME) },
+            onConnected = { replaceStack(Screen.HOME) }
+        )
 
-        Screen.RESET -> ResetPWScreen(viewModel = authViewModel, onResetSuccess = { navigateBack() }, onBack = { navigateBack() })
+        Screen.RESET -> ResetPWScreen(
+            viewModel = authViewModel,
+            onResetSuccess = { navigateBack() },
+            onBack = { navigateBack() }
+        )
 
         Screen.HOME -> HomeScreen(
             musicPlayerViewModel = musicPlayerViewModel,
@@ -210,17 +244,30 @@ fun MoodSyncApp(
             currentTab = 3
         )
 
-        Screen.SETTINGS -> SettingsScreen(onBack = { navigateBack() }, onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) })
+        Screen.SETTINGS -> SettingsScreen(
+            onBack = { navigateBack() },
+            onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) }
+        )
 
-        Screen.SPOTIFY -> SpotifyConnectionScreen(spotifyViewModel = spotifyViewModel, onBack = { navigateBack() })
+        Screen.SPOTIFY -> SpotifyConnectionScreen(
+            spotifyViewModel = spotifyViewModel,
+            onBack = { navigateBack() }
+        )
 
-        Screen.MUSIC_PLAYER -> MusicPlayerScreen(viewModel = musicPlayerViewModel, onBack = { navigateBack() })
+        Screen.MUSIC_PLAYER -> MusicPlayerScreen(
+            viewModel = musicPlayerViewModel,
+            onBack = { navigateBack() }
+        )
 
         Screen.EMOTION_CHAT -> EmotionChatScreen(
             chatViewModel = chatGPTViewModel,
             onBack = { navigateBack() },
             onSongClick = { song ->
-                val track = Track(id = "${song.artist}-${song.title}", name = song.title, artist = song.artist, albumArtUrl = "", previewUrl = null, durationMs = 0L)
+                val track = Track(
+                    id = "${song.artist}-${song.title}",
+                    name = song.title, artist = song.artist,
+                    albumArtUrl = "", previewUrl = null, durationMs = 0L
+                )
                 musicPlayerViewModel.loadTrackWithVideoId(track, song.youtubeVideoId)
                 navigateTo(Screen.MUSIC_PLAYER)
             }
@@ -229,14 +276,22 @@ fun MoodSyncApp(
 }
 
 @Composable
-fun LoadingScreen() { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+fun LoadingScreen() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+}
 
 @Composable
-fun ErrorScreen(msg: String) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Error: $msg", color = MaterialTheme.colorScheme.error) } }
+fun ErrorScreen(msg: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text("Error: $msg", color = MaterialTheme.colorScheme.error)
+    }
+}
 
 class MusicPlayerViewModelFactory(private val app: android.app.Application) : ViewModelProvider.Factory {
     override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(MusicPlayerViewModel::class.java)) { @Suppress("UNCHECKED_CAST") return MusicPlayerViewModel(app) as T }
+        if (modelClass.isAssignableFrom(MusicPlayerViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST") return MusicPlayerViewModel(app) as T
+        }
         throw IllegalArgumentException("Unknown ViewModel")
     }
 }

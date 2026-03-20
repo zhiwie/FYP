@@ -13,7 +13,8 @@ import com.spotify.sdk.android.auth.AuthorizationResponse
 import kotlinx.coroutines.flow.StateFlow
 
 class SpotifyViewModel(private val context: Context) : ViewModel() {
-    private val repository = SpotifyRepository(context)
+    // Use singleton so token is shared across all screens
+    private val repository = SpotifyRepository.getInstance(context)
     val authState: StateFlow<SpotifyAuthState> = repository.authState
 
     companion object {
@@ -23,9 +24,17 @@ class SpotifyViewModel(private val context: Context) : ViewModel() {
             "streaming",
             "user-read-email",
             "user-read-private",
+            "user-read-playback-state",
+            "user-modify-playback-state",
+            "user-read-currently-playing",
+            "playlist-read-private",
+            "playlist-read-collaborative",
             "playlist-modify-public",
             "playlist-modify-private",
-            "user-top-read"
+            "user-top-read",
+            "user-read-recently-played",
+            "user-library-read",
+            "app-remote-control"
         )
     }
 
@@ -45,43 +54,30 @@ class SpotifyViewModel(private val context: Context) : ViewModel() {
     }
 
     fun handleAuthResult(responseCode: Int, response: AuthorizationResponse) {
-        Log.d(TAG, "Auth response type: ${response.type}")
-        Log.d(TAG, "Auth response error: ${response.error}")
-        Log.d(TAG, "Auth response token null? ${response.accessToken == null}")
+        Log.d(TAG, "Auth response type: ${response.type}, error: ${response.error}")
 
         when (response.type) {
             AuthorizationResponse.Type.TOKEN -> {
                 val token = response.accessToken
                 if (!token.isNullOrEmpty()) {
-                    Log.d(TAG, "✅ Spotify token received successfully!")
+                    Log.d(TAG, "Spotify token received (${token.length} chars)")
                     repository.handleAuthResponse(token)
                 } else {
-                    Log.e(TAG, "❌ Token was null or empty despite TOKEN type")
                     repository.handleAuthError("Token was empty")
                 }
             }
-            AuthorizationResponse.Type.ERROR -> {
-                Log.e(TAG, "❌ Spotify auth error: ${response.error}")
+            AuthorizationResponse.Type.ERROR ->
                 repository.handleAuthError(response.error ?: "Authentication failed")
-            }
-            AuthorizationResponse.Type.EMPTY -> {
-                Log.w(TAG, "⚠️ Empty response - user may have cancelled")
+            AuthorizationResponse.Type.EMPTY ->
                 repository.handleAuthError("Login was cancelled")
-            }
-            else -> {
-                Log.e(TAG, "❌ Unexpected response type: ${response.type}")
-                repository.handleAuthError("Unexpected error, please try again")
-            }
+            else ->
+                repository.handleAuthError("Unexpected error")
         }
     }
 
     fun restoreAuthState() = repository.restoreAuthState()
-
     fun isSpotifyConnected(): Boolean = repository.isAuthenticated()
-
     fun disconnectSpotify() = repository.signOut()
-
     fun getUserTopTracks(): List<MockTrack> = repository.getUserTopTracks()
-
     fun getAccessToken(): String? = repository.getAccessToken()
 }
