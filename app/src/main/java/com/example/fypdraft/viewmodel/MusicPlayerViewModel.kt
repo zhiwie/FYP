@@ -234,22 +234,66 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Start polling Spotify for position updates every second.
-     * This replaces the subscribeToPlayerState() approach which kept
-     * Spotify's own MediaSession active and caused duplicate notifications.
+     * Start polling Spotify for position AND track info every second.
+     * Detects when Spotify auto-advances to the next song and updates
+     * the currentTrack in playerState so album art/title/artist refresh.
      */
+    private var lastPolledTrackUri: String? = null
+
     private fun startSpotifyPositionPolling() {
         spotifyPollingJob?.cancel()
         spotifyPollingJob = viewModelScope.launch {
             while (isActive) {
-                spotifyPlayback?.getPosition { position, duration, isPaused ->
+                spotifyPlayback?.getPlayerInfo { sps ->
                     val cur = _playerState.value
-                    _playerState.value = cur.copy(
-                        currentPosition = position,
-                        duration = duration,
-                        isPlaying = !isPaused,
-                        progress = if (duration > 0) position.toFloat() / duration else 0f
-                    )
+
+                    // Detect if Spotify changed to a different track
+                    // (e.g. auto-advance, skip from Spotify notification, etc.)
+                    val trackChanged = lastPolledTrackUri != null && lastPolledTrackUri != sps.trackUri
+                    lastPolledTrackUri = sps.trackUri
+
+                    if (trackChanged) {
+                        // Spotify moved to a new track — update currentTrack
+                        // Extract Spotify track ID from URI: "spotify:track:ABC123" -> "ABC123"
+                        val newTrackId = sps.trackUri.removePrefix("spotify:track:")
+                        val newTrack = Track(
+                            id = newTrackId,
+                            name = sps.trackName,
+                            artist = sps.artistName,
+                            album = sps.albumName,
+                            albumArtUrl = "", // Will be empty — Spotify App Remote doesn't give HTTP URLs
+                            previewUrl = null,
+                            durationMs = sps.durationMs,
+                            spotifyUri = sps.trackUri
+                        )
+
+                        // Try to find this track in our playlist first (it has proper albumArtUrl)
+                        val fromPlaylist = cur.playlist.firstOrNull { it.id == newTrackId }
+                        val finalTrack = fromPlaylist ?: newTrack
+
+                        // Update index if found in playlist
+                        val newIndex = cur.playlist.indexOfFirst { it.id == newTrackId }
+                            .let { if (it >= 0) it else cur.currentIndex }
+
+                        Log.d(TAG, "Track changed via Spotify: '${finalTrack.name}' by ${finalTrack.artist}")
+
+                        _playerState.value = cur.copy(
+                            currentTrack = finalTrack,
+                            currentIndex = newIndex,
+                            isPlaying = !sps.isPaused,
+                            currentPosition = sps.positionMs,
+                            duration = sps.durationMs,
+                            progress = if (sps.durationMs > 0) sps.positionMs.toFloat() / sps.durationMs else 0f
+                        )
+                    } else {
+                        // Same track — just update position
+                        _playerState.value = cur.copy(
+                            currentPosition = sps.positionMs,
+                            duration = sps.durationMs,
+                            isPlaying = !sps.isPaused,
+                            progress = if (sps.durationMs > 0) sps.positionMs.toFloat() / sps.durationMs else 0f
+                        )
+                    }
                 }
                 delay(1000)
             }
@@ -370,6 +414,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         if (spotifyPlayback?.isConnected() == true) {
             val uri = track.spotifyUri ?: "spotify:track:${track.id}"
             Log.d(TAG, "Playing via Spotify App Remote: $uri")
+            lastPolledTrackUri = uri  // Reset so polling doesn't falsely detect a change
             spotifyPlayback?.play(uri)
             _playerState.value = _playerState.value.copy(isPlaying = true)
             startSpotifyPositionPolling()
@@ -394,6 +439,69 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun loadTrackWithVideoId(track: Track, knownVideoId: String?) {
         loadTrack(track) // Spotify-first, ignore videoId
+    }
+
+    // ── Play from AI recommendation ──────────────────────────────────
+
+    private var spotifyMusicRepo: com.example.fypdraft.data.repository.SpotifyMusicRepository? = null
+
+    /**
+     * Set the SpotifyMusicRepository so we can search for songs.
+     * Call this from your Activity/NavHost when setting up the ViewModel.
+     */
+    fun setSpotifyMusicRepo(repo: com.example.fypdraft.data.repository.SpotifyMusicRepository?) {
+        spotifyMusicRepo = repo
+    }
+
+    /**
+     * Search Spotify for a song recommended by the AI chat, then play it.
+     * This bridges the gap between ChatGPT's text recommendations and
+     * actual Spotify playback.
+     */
+    fun playFromRecommendation(
+        songTitle: String,
+        songArtist: String,
+        onResult: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            try {
+                val repo = spotifyMusicRepo
+                if (repo == null) {
+                    Log.e(TAG, "SpotifyMusicRepository not set — cannot search")
+                    onResult(false, "Spotify not connected")
+                    return@launch
+                }
+
+                // Search Spotify for "artist title" to find the exact track
+                val query = "$songArtist $songTitle"
+                Log.d(TAG, "Searching Spotify for AI recommendation: '$query'")
+
+                val results = repo.searchTracks(query, 5)
+
+                if (results.isEmpty()) {
+                    Log.w(TAG, "No Spotify results for '$query'")
+                    onResult(false, "Song not found on Spotify")
+                    return@launch
+                }
+
+                // Try to find an exact match first, otherwise take the first result
+                val bestMatch = results.firstOrNull { track ->
+                    track.name.equals(songTitle, ignoreCase = true) &&
+                            track.artist.equals(songArtist, ignoreCase = true)
+                } ?: results.firstOrNull { track ->
+                    track.name.contains(songTitle, ignoreCase = true) ||
+                            track.artist.contains(songArtist, ignoreCase = true)
+                } ?: results.first()
+
+                Log.d(TAG, "Found match: '${bestMatch.name}' by ${bestMatch.artist}")
+                loadTrack(bestMatch, results)
+                onResult(true, null)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "playFromRecommendation failed", e)
+                onResult(false, "Error: ${e.message}")
+            }
+        }
     }
 
     // ── Preview URL playback (fallback) ──────────────────────────────

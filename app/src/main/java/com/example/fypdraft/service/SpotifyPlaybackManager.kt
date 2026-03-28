@@ -198,16 +198,25 @@ class SpotifyPlaybackManager(private val context: Context) {
     }
 
     /**
-     * Start periodic polling of player state for position updates.
-     * Call this when playing, stop when paused.
-     * The caller (ViewModel) manages the coroutine lifecycle.
+     * Poll position AND track info. Returns everything needed to detect
+     * track changes and update the UI (album art, title, artist).
      */
-    fun getPosition(callback: (Long, Long, Boolean) -> Unit) {
+    fun getPlayerInfo(callback: (SpotifyPlaybackState) -> Unit) {
         appRemote?.playerApi?.playerState?.setResultCallback { state ->
+            val track = state.track ?: return@setResultCallback
             callback(
-                state.playbackPosition,
-                state.track?.duration ?: 0L,
-                state.isPaused
+                SpotifyPlaybackState(
+                    trackName = track.name,
+                    artistName = track.artist.name,
+                    albumName = track.album.name,
+                    albumArtUri = track.imageUri?.raw ?: "",
+                    trackUri = track.uri,
+                    durationMs = track.duration,
+                    positionMs = state.playbackPosition,
+                    isPaused = state.isPaused,
+                    isShuffling = state.playbackOptions.isShuffling,
+                    repeatMode = state.playbackOptions.repeatMode
+                )
             )
         }
     }

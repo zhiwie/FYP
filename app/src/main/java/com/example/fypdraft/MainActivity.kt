@@ -23,9 +23,13 @@ import com.example.fypdraft.viewmodel.AuthViewModel
 import com.example.fypdraft.viewmodel.ChatGPTViewModel
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.viewmodel.SpotifyViewModel
+import com.example.fypdraft.data.repository.SpotifyMusicRepository
 import com.example.fypdraft.data.repository.SpotifyRepository
+import com.example.fypdraft.model.PetRepository
 import com.example.fypdraft.model.Track
 import com.example.fypdraft.ui.theme.FYPDraftTheme
+import com.example.fypdraft.ui.theme.AppThemeState
+import com.example.fypdraft.ui.theme.ThemeManager
 import com.example.fypdraft.view.*
 import com.spotify.sdk.android.auth.AuthorizationClient
 import kotlinx.coroutines.delay
@@ -46,6 +50,8 @@ object Screen {
     const val SPOTIFY       = "spotify"
     const val MUSIC_PLAYER  = "musicplayer"
     const val EMOTION_CHAT  = "emotionchat"
+    const val PET_SHOP      = "petshop"
+    const val THEME         = "theme"
 
     fun tabIndex(screen: String): Int = when (screen) {
         HOME -> 0; SEARCH -> 1; FRIENDS -> 2; LIBRARY -> 3; else -> -1
@@ -117,6 +123,11 @@ fun AppInitializer(activity: MainActivity, musicPlayerViewModel: MusicPlayerView
                 musicPlayerViewModel.initializeMLModels()
                 if (activity.spotifyRepository.isAuthenticated()) {
                     musicPlayerViewModel.connectSpotifyPlayback(activity)
+
+                    // Wire up SpotifyMusicRepository so AI chat recommendations
+                    // can search Spotify and play songs
+                    val musicRepo = SpotifyMusicRepository(activity.spotifyRepository)
+                    musicPlayerViewModel.setSpotifyMusicRepo(musicRepo)
                 }
                 delay(500)
             } catch (_: Exception) {}
@@ -147,6 +158,24 @@ fun MoodSyncApp(
     val authViewModel: AuthViewModel = viewModel()
     val chatGPTViewModel: ChatGPTViewModel = viewModel()
 
+    // Pet system
+    val petRepository = remember { PetRepository() }
+    val petState by petRepository.petState.collectAsState()
+
+    // Theme system
+    val themeManager = remember { ThemeManager(activity) }
+    val themeState by themeManager.themeState.collectAsState()
+
+    // Sync pet mood to theme
+    LaunchedEffect(petState.mood) {
+        themeManager.updateMood(petState.mood)
+    }
+
+    // Load pet from Firebase
+    LaunchedEffect(Unit) {
+        petRepository.loadPet()
+    }
+
     val startScreen = remember {
         try { if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.WELCOME } catch (_: Exception) { Screen.WELCOME }
     }
@@ -167,111 +196,180 @@ fun MoodSyncApp(
     LaunchedEffect(spotifyAuthState.isAuthenticated) {
         if (spotifyAuthState.isAuthenticated) {
             musicPlayerViewModel.connectSpotifyPlayback(activity)
+
+            // Also wire up the music repo when auth state changes
+            val musicRepo = SpotifyMusicRepository(spotifyRepository)
+            musicPlayerViewModel.setSpotifyMusicRepo(musicRepo)
         }
     }
 
-    when (currentScreen) {
-        Screen.WELCOME -> WelcomeScreen(
-            onSignUp = { navigateTo(Screen.SIGNUP) },
-            onLogIn = { navigateTo(Screen.LOGIN) }
-        )
+    // Track playing state for the floating pet
+    val playerState by musicPlayerViewModel.playerState.collectAsState()
+    val isPlaying = playerState.isPlaying
 
-        Screen.LOGIN -> LoginScreen(
-            viewModel = authViewModel,
-            onLoginSuccess = { replaceStack(Screen.HOME) },
-            onForgotPassword = { navigateTo(Screen.RESET) }
-        )
+    // Add XP when a new song starts playing
+    val currentTrackId = playerState.currentTrack?.id
+    LaunchedEffect(currentTrackId) {
+        if (currentTrackId != null) {
+            petRepository.addXP(10) // 10 XP per song
+        }
+    }
 
-        Screen.SIGNUP -> SignUpScreen(
-            viewModel = authViewModel,
-            onSignUpSuccess = { navigateTo(Screen.NICKNAME) },
-            onNavigateToLogin = { navigateBack() }
-        )
+    // Show floating pet on main screens (not on welcome/login/signup)
+    val showFloatingPet = currentScreen in listOf(
+        Screen.HOME, Screen.SEARCH, Screen.FRIENDS, Screen.LIBRARY,
+        Screen.MUSIC_PLAYER, Screen.SETTINGS, Screen.EMOTION_CHAT, Screen.PET_SHOP
+    )
 
-        Screen.NICKNAME -> NicknameScreen(
-            onContinue = { _ -> navigateTo(Screen.CONNECT_MUSIC) }
-        )
+    Box(Modifier.fillMaxSize()) {
+        when (currentScreen) {
+            Screen.WELCOME -> WelcomeScreen(
+                onSignUp = { navigateTo(Screen.SIGNUP) },
+                onLogIn = { navigateTo(Screen.LOGIN) }
+            )
 
-        Screen.CONNECT_MUSIC -> ConnectMusicScreen(
-            spotifyViewModel = spotifyViewModel,
-            onSkip = { replaceStack(Screen.HOME) },
-            onConnected = { replaceStack(Screen.HOME) }
-        )
+            Screen.LOGIN -> LoginScreen(
+                viewModel = authViewModel,
+                onLoginSuccess = { replaceStack(Screen.HOME) },
+                onForgotPassword = { navigateTo(Screen.RESET) }
+            )
 
-        Screen.RESET -> ResetPWScreen(
-            viewModel = authViewModel,
-            onResetSuccess = { navigateBack() },
-            onBack = { navigateBack() }
-        )
+            Screen.SIGNUP -> SignUpScreen(
+                viewModel = authViewModel,
+                onSignUpSuccess = { navigateTo(Screen.NICKNAME) },
+                onNavigateToLogin = { navigateBack() }
+            )
 
-        Screen.HOME -> HomeScreen(
-            musicPlayerViewModel = musicPlayerViewModel,
-            spotifyRepository = spotifyRepository,
-            onNavigateToSearch = { bottomNav(Screen.SEARCH) },
-            onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
-            onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
-            onNavigateToSettings = { navigateTo(Screen.SETTINGS) },
-            onNavigateToSpotify = { navigateTo(Screen.SPOTIFY) },
-            onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
-            onNavigateToEmotionChat = { navigateTo(Screen.EMOTION_CHAT) },
-            onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) },
-            currentTab = 0
-        )
+            Screen.NICKNAME -> NicknameScreen(
+                onContinue = { _ -> navigateTo(Screen.CONNECT_MUSIC) }
+            )
 
-        Screen.SEARCH -> SearchScreen(
-            musicPlayerViewModel = musicPlayerViewModel,
-            spotifyRepository = spotifyRepository,
-            onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
-            onNavigateToHome = { navigateBack() },
-            onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
-            onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
-            currentTab = 1
-        )
+            Screen.CONNECT_MUSIC -> ConnectMusicScreen(
+                spotifyViewModel = spotifyViewModel,
+                onSkip = { replaceStack(Screen.HOME) },
+                onConnected = { replaceStack(Screen.HOME) }
+            )
 
-        Screen.FRIENDS -> FriendsScreen(
-            onNavigateToHome = { navigateBack() },
-            onNavigateToSearch = { bottomNav(Screen.SEARCH) },
-            onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
-            currentTab = 2
-        )
+            Screen.RESET -> ResetPWScreen(
+                viewModel = authViewModel,
+                onResetSuccess = { navigateBack() },
+                onBack = { navigateBack() }
+            )
 
-        Screen.LIBRARY -> LibraryScreen(
-            musicPlayerViewModel = musicPlayerViewModel,
-            onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
-            onNavigateToHome = { navigateBack() },
-            onNavigateToSearch = { bottomNav(Screen.SEARCH) },
-            onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
-            currentTab = 3
-        )
+            Screen.HOME -> HomeScreen(
+                musicPlayerViewModel = musicPlayerViewModel,
+                spotifyRepository = spotifyRepository,
+                petRepository = petRepository,
+                themeState = themeState,
+                onNavigateToSearch = { bottomNav(Screen.SEARCH) },
+                onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
+                onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
+                onNavigateToSettings = { navigateTo(Screen.SETTINGS) },
+                onNavigateToSpotify = { navigateTo(Screen.SPOTIFY) },
+                onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
+                onNavigateToEmotionChat = { navigateTo(Screen.EMOTION_CHAT) },
+                onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) },
+                currentTab = 0
+            )
 
-        Screen.SETTINGS -> SettingsScreen(
-            onBack = { navigateBack() },
-            onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) }
-        )
+            Screen.SEARCH -> SearchScreen(
+                musicPlayerViewModel = musicPlayerViewModel,
+                spotifyRepository = spotifyRepository,
+                themeState = themeState,
+                onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
+                onNavigateToHome = { navigateBack() },
+                onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
+                onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
+                currentTab = 1
+            )
 
-        Screen.SPOTIFY -> SpotifyConnectionScreen(
-            spotifyViewModel = spotifyViewModel,
-            onBack = { navigateBack() }
-        )
+            Screen.FRIENDS -> FriendsScreen(
+                musicPlayerViewModel = musicPlayerViewModel,
+                themeState = themeState,
+                onNavigateToHome = { navigateBack() },
+                onNavigateToSearch = { bottomNav(Screen.SEARCH) },
+                onNavigateToLibrary = { bottomNav(Screen.LIBRARY) },
+                onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
+                currentTab = 2
+            )
 
-        Screen.MUSIC_PLAYER -> MusicPlayerScreen(
-            viewModel = musicPlayerViewModel,
-            onBack = { navigateBack() }
-        )
+            Screen.LIBRARY -> LibraryScreen(
+                musicPlayerViewModel = musicPlayerViewModel,
+                spotifyRepository = spotifyRepository,
+                themeState = themeState,
+                onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
+                onNavigateToHome = { navigateBack() },
+                onNavigateToSearch = { bottomNav(Screen.SEARCH) },
+                onNavigateToFriends = { bottomNav(Screen.FRIENDS) },
+                currentTab = 3
+            )
 
-        Screen.EMOTION_CHAT -> EmotionChatScreen(
-            chatViewModel = chatGPTViewModel,
-            onBack = { navigateBack() },
-            onSongClick = { song ->
-                val track = Track(
-                    id = "${song.artist}-${song.title}",
-                    name = song.title, artist = song.artist,
-                    albumArtUrl = "", previewUrl = null, durationMs = 0L
-                )
-                musicPlayerViewModel.loadTrackWithVideoId(track, song.youtubeVideoId)
-                navigateTo(Screen.MUSIC_PLAYER)
+            Screen.SETTINGS -> SettingsScreen(
+                themeState = themeState,
+                onBack = { navigateBack() },
+                onSignOut = { authViewModel.signOut(); replaceStack(Screen.WELCOME) },
+                onNavigateToTheme = { navigateTo(Screen.THEME) }
+            )
+
+            Screen.SPOTIFY -> SpotifyConnectionScreen(
+                spotifyViewModel = spotifyViewModel,
+                onBack = { navigateBack() }
+            )
+
+            Screen.THEME -> ThemeSelectionScreen(
+                themeManager = themeManager,
+                onBack = { navigateBack() }
+            )
+
+            Screen.MUSIC_PLAYER -> MusicPlayerScreen(
+                viewModel = musicPlayerViewModel,
+                themeState = themeState,
+                onBack = { navigateBack() }
+            )
+
+            Screen.EMOTION_CHAT -> EmotionChatScreen(
+                chatViewModel = chatGPTViewModel,
+                musicPlayerViewModel = musicPlayerViewModel,
+                petState = petState,
+                petRepository = petRepository,
+                themeState = themeState,
+                themeManager = themeManager,
+                onBack = { navigateBack() },
+                onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) }
+            )
+
+            Screen.PET_SHOP -> PetShopScreen(
+                petState = petState,
+                petRepository = petRepository,
+                onBack = { navigateBack() },
+                onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) }
+            )
+        }
+
+        // Floating pet overlay on main screens
+        if (showFloatingPet) {
+            val playbackError by musicPlayerViewModel.playbackError.collectAsState()
+            var justLeveledUp by remember { mutableStateOf(false) }
+            val petLevel = petState.level
+
+            LaunchedEffect(petLevel) {
+                if (petLevel > 1) {
+                    justLeveledUp = true
+                    delay(4000)
+                    justLeveledUp = false
+                }
             }
-        )
+
+            FloatingPetOverlay(
+                petState = petState,
+                petRepository = petRepository,
+                isPlaying = isPlaying,
+                currentScreen = currentScreen,
+                playerError = playbackError != null,
+                justLeveledUp = justLeveledUp,
+                onTap = { navigateTo(Screen.PET_SHOP) }
+            )
+        }
     }
 }
 

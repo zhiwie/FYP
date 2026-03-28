@@ -32,7 +32,11 @@ import com.example.fypdraft.ml.RLRecommendationEngine
 import com.example.fypdraft.ml.RewardEvent
 import com.example.fypdraft.ml.RewardType
 import com.example.fypdraft.model.MascotMoodDetector
+import com.example.fypdraft.model.PetRepository
+import com.example.fypdraft.model.PetState
 import com.example.fypdraft.model.Track
+import com.example.fypdraft.ui.theme.AppThemeState
+import com.example.fypdraft.ui.theme.animatedMoodBrushLight
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.async
@@ -48,6 +52,8 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
     musicPlayerViewModel: MusicPlayerViewModel? = null,
     spotifyRepository: SpotifyRepository? = null,
+    petRepository: PetRepository? = null,
+    themeState: AppThemeState = AppThemeState(),
     onNavigateToSearch: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
     onNavigateToLibrary: () -> Unit = {},
@@ -83,6 +89,20 @@ fun HomeScreen(
     var mascotMood by remember { mutableStateOf(MascotMoodDetector.detectMood()) }
     var chatMessage by remember { mutableStateOf<String?>(null) }
     var showMoodPicker by remember { mutableStateOf(false) }
+
+    // Pet state
+    val localPetRepo = remember { petRepository ?: PetRepository() }
+    val petState by localPetRepo.petState.collectAsState()
+
+    // Load pet from Firebase on first load
+    LaunchedEffect(Unit) {
+        localPetRepo.loadPet()
+    }
+
+    // Sync mascot mood to pet mood
+    LaunchedEffect(mascotMood.mood) {
+        localPetRepo.updateMood(mascotMood.mood)
+    }
 
     // KEY FIX: Load when isSpotifyConnected changes to true
     LaunchedEffect(isSpotifyConnected) {
@@ -198,7 +218,8 @@ fun HomeScreen(
                 }
             }
         ) { padding ->
-            Box(modifier.fillMaxSize().background(Color(0xFFF8F8FA)).padding(padding)) {
+            val bgBrush = animatedMoodBrushLight(themeState)
+            Box(modifier.fillMaxSize().background(bgBrush).padding(padding)) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
 
                     // Top bar
@@ -236,9 +257,12 @@ fun HomeScreen(
                         Spacer(Modifier.height(16.dp))
                     }
 
-                    // Mascot
+                    // Mascot with pixel pet
                     MascotWidget(
-                        mood = mascotMood, chatMessage = chatMessage,
+                        mood = mascotMood,
+                        petState = petState,
+                        petRepository = localPetRepo,
+                        chatMessage = chatMessage,
                         onQuickReply = { reply ->
                             scope.launch {
                                 if (reply == "yes") { chatMessage = "Here are tracks just for you 🎶"; rlEngine.recordReward(RewardEvent(RewardType.SUGGESTION_ACCEPTED, mascotMood.mood, null)) }

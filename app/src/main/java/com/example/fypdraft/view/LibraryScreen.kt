@@ -15,20 +15,31 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.fypdraft.data.repository.FavoritesRepository
+import com.example.fypdraft.data.repository.SpotifyMusicRepository
+import com.example.fypdraft.data.repository.SpotifyPlaylistInfo
+import com.example.fypdraft.data.repository.SpotifyRepository
 import com.example.fypdraft.model.SongRecommendation
-import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.model.Track
+import com.example.fypdraft.ui.theme.AppThemeState
+import com.example.fypdraft.ui.theme.animatedMoodBrushLight
+import com.example.fypdraft.viewmodel.MusicPlayerViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun LibraryScreen(
     musicPlayerViewModel: MusicPlayerViewModel? = null,
+    spotifyRepository: SpotifyRepository? = null,
+    themeState: AppThemeState = AppThemeState(),
     onNavigateToMusicPlayer: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
@@ -38,18 +49,44 @@ fun LibraryScreen(
 ) {
     val scope = rememberCoroutineScope()
     val favoritesRepo = remember { FavoritesRepository() }
+    val spotifyMusicRepo = remember(spotifyRepository) {
+        spotifyRepository?.let { SpotifyMusicRepository(it) }
+    }
 
     var favorites by remember { mutableStateOf<List<Pair<String, SongRecommendation>>>(emptyList()) }
+    var playlists by remember { mutableStateOf<List<SpotifyPlaylistInfo>>(emptyList()) }
+    var playlistsLoading by remember { mutableStateOf(false) }
     var selectedFilter by remember { mutableStateOf("All") }
     val filters = listOf("All", "Favorites", "Playlists")
 
-    // Load real favorites from Firebase
+    // Track which song is loading (for search+play)
+    var loadingSongId by remember { mutableStateOf<String?>(null) }
+
+    val isSpotifyConnected = spotifyRepository?.let {
+        val authState by it.authState.collectAsState()
+        authState.isAuthenticated
+    } ?: false
+
+    // Load favorites from Firebase
     LaunchedEffect(Unit) {
         try {
             favoritesRepo.observeFavorites()
-                .catch { /* User not logged in or error */ }
+                .catch { /* ignore */ }
                 .collect { list -> favorites = list }
         } catch (_: Exception) {}
+    }
+
+    // Load Spotify playlists
+    LaunchedEffect(isSpotifyConnected) {
+        if (isSpotifyConnected && spotifyMusicRepo != null) {
+            playlistsLoading = true
+            try {
+                playlists = withContext(Dispatchers.IO) {
+                    spotifyMusicRepo.getUserPlaylists(10)
+                }
+            } catch (_: Exception) {}
+            playlistsLoading = false
+        }
     }
 
     Scaffold(
@@ -66,7 +103,7 @@ fun LibraryScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFFF8F8FA))
+                .background(animatedMoodBrushLight(themeState))
                 .padding(padding)
         ) {
             Row(
@@ -83,7 +120,10 @@ fun LibraryScreen(
                         onClick = { selectedFilter = filter },
                         label = { Text(filter, fontSize = 13.sp) },
                         shape = RoundedCornerShape(20.dp),
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF1A1A2E), selectedLabelColor = Color.White)
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF1A1A2E),
+                            selectedLabelColor = Color.White
+                        )
                     )
                 }
             }
@@ -94,7 +134,7 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // Liked songs count
+                // ── Quick access items ───────────────────────────────
                 item {
                     LibraryItem(
                         icon = Icons.Filled.Favorite,
@@ -115,29 +155,71 @@ fun LibraryScreen(
                     )
                 }
 
-                // Show favorites when filter is "Favorites" or "All"
+                // ── Spotify playlists section ────────────────────────
+                if (selectedFilter == "Playlists" || selectedFilter == "All") {
+                    if (!isSpotifyConnected) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1DB954).copy(alpha = 0.1f)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("🎵", fontSize = 24.sp)
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Connect Spotify", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Text("See your playlists here", fontSize = 12.sp, color = Color.Gray)
+                                    }
+                                }
+                            }
+                        }
+                    } else if (playlistsLoading) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color(0xFF1DB954))
+                            }
+                        }
+                    } else if (playlists.isNotEmpty()) {
+                        item {
+                            Spacer(Modifier.height(12.dp))
+                            Text("Your Spotify Playlists", fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(vertical = 8.dp))
+                        }
+                        items(playlists) { playlist ->
+                            PlaylistItem(playlist = playlist, onClick = { /* TODO: open playlist tracks */ })
+                        }
+                    }
+                }
+
+                // ── Favorites section ────────────────────────────────
                 if (selectedFilter == "Favorites" || selectedFilter == "All") {
                     if (favorites.isNotEmpty()) {
                         item {
-                            Spacer(Modifier.height(16.dp))
-                            Text("Your Favorites", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text("Your Favorites", fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(vertical = 8.dp))
                         }
 
                         items(favorites) { (docId, song) ->
+                            val songId = "${song.artist}-${song.title}"
+                            val isLoading = loadingSongId == songId
+
                             FavoriteItem(
                                 song = song,
+                                isLoading = isLoading,
                                 onPlay = {
-                                    val track = Track(
-                                        id = "${song.artist}-${song.title}",
-                                        name = song.title,
-                                        artist = song.artist,
-                                        albumArtUrl = "",
-                                        previewUrl = null,
-                                        durationMs = 0L
-                                    )
-                                    musicPlayerViewModel?.loadTrack(track)
-                                    musicPlayerViewModel?.play()
-                                    onNavigateToMusicPlayer()
+                                    // Search Spotify for the song, then play it
+                                    if (musicPlayerViewModel != null) {
+                                        loadingSongId = songId
+                                        musicPlayerViewModel.playFromRecommendation(
+                                            songTitle = song.title,
+                                            songArtist = song.artist
+                                        ) { success, _ ->
+                                            loadingSongId = null
+                                            if (success) onNavigateToMusicPlayer()
+                                        }
+                                    }
                                 },
                                 onRemove = {
                                     scope.launch {
@@ -149,7 +231,12 @@ fun LibraryScreen(
                     } else if (selectedFilter == "Favorites") {
                         item {
                             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Text("No favorites yet. Like songs to see them here!", color = Color.Gray, fontSize = 14.sp)
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("💖", fontSize = 40.sp)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("No favorites yet", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                                    Text("Like songs to see them here!", color = Color.Gray, fontSize = 13.sp)
+                                }
                             }
                         }
                     }
@@ -161,9 +248,14 @@ fun LibraryScreen(
     }
 }
 
+// ── Library quick access item ────────────────────────────────────────────
+
 @Composable
 private fun LibraryItem(icon: ImageVector, iconBg: Color, title: String, subtitle: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Box(Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)).background(iconBg), contentAlignment = Alignment.Center) {
             Icon(icon, null, tint = Color.White, modifier = Modifier.size(26.dp))
         }
@@ -176,16 +268,69 @@ private fun LibraryItem(icon: ImageVector, iconBg: Color, title: String, subtitl
     }
 }
 
+// ── Spotify playlist item ────────────────────────────────────────────────
+
 @Composable
-private fun FavoriteItem(song: SongRecommendation, onPlay: () -> Unit, onRemove: () -> Unit) {
+private fun PlaylistItem(playlist: SpotifyPlaylistInfo, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onPlay() }.padding(vertical = 8.dp),
+        Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Playlist cover art
+        if (playlist.imageUrl.isNotEmpty()) {
+            AsyncImage(
+                model = playlist.imageUrl,
+                contentDescription = playlist.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
+            )
+        } else {
+            Box(
+                Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF1DB954).copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("🎵", fontSize = 22.sp)
+            }
+        }
+
+        Spacer(Modifier.width(14.dp))
+
+        Column(Modifier.weight(1f)) {
+            Text(playlist.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.Black,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "${playlist.trackCount} tracks · ${playlist.ownerName}",
+                fontSize = 12.sp, color = Color.Gray, maxLines = 1
+            )
+        }
+
+        Icon(Icons.Filled.ChevronRight, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+    }
+}
+
+// ── Favorite song item ───────────────────────────────────────────────────
+
+@Composable
+private fun FavoriteItem(
+    song: SongRecommendation,
+    isLoading: Boolean = false,
+    onPlay: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = !isLoading) { onPlay() }.padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFFEEEEEE)),
             contentAlignment = Alignment.Center
-        ) { Text("\uD83C\uDFB5", fontSize = 20.sp) }
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color(0xFF1DB954))
+            } else {
+                Text("🎵", fontSize = 20.sp)
+            }
+        }
 
         Spacer(Modifier.width(12.dp))
 

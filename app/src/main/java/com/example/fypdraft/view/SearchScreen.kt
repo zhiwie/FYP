@@ -25,6 +25,8 @@ import com.example.fypdraft.data.repository.SearchHistoryRepository
 import com.example.fypdraft.data.repository.SpotifyMusicRepository
 import com.example.fypdraft.data.repository.SpotifyRepository
 import com.example.fypdraft.model.Track
+import com.example.fypdraft.ui.theme.AppThemeState
+import com.example.fypdraft.ui.theme.animatedMoodBrushLight
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -41,6 +43,7 @@ private data class MoodCategory(
 fun SearchScreen(
     musicPlayerViewModel: MusicPlayerViewModel? = null,
     spotifyRepository: SpotifyRepository? = null,
+    themeState: AppThemeState = AppThemeState(),
     onNavigateToMusicPlayer: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
@@ -84,7 +87,7 @@ fun SearchScreen(
         }
     }
 
-    // Debounced search — waits 400ms after user stops typing, then searches Spotify
+    // Debounced search
     LaunchedEffect(searchQuery) {
         searchJob?.cancel()
 
@@ -96,16 +99,15 @@ fun SearchScreen(
 
         searchJob = scope.launch {
             isSearching = true
-            delay(400) // Debounce
+            delay(400)
 
             Log.d("SearchScreen", "Searching Spotify for: '$searchQuery'")
-            val results = spotifyMusicRepo.searchTracks(searchQuery, 25)
+            val results = spotifyMusicRepo.searchTracks(searchQuery, 10)
             Log.d("SearchScreen", "Got ${results.size} results")
 
             searchResults = results
             isSearching = false
 
-            // Save to history if meaningful query
             if (searchQuery.length >= 3) {
                 searchHistoryRepo.saveSearch(searchQuery)
             }
@@ -117,7 +119,7 @@ fun SearchScreen(
             BottomNavBar(currentTab, onHome = onNavigateToHome, onSearch = {}, onFriends = onNavigateToFriends, onLibrary = onNavigateToLibrary)
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().background(Color(0xFFF8F8FA)).padding(padding)) {
+        Column(Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)) {
 
             // Search bar
             OutlinedTextField(
@@ -151,7 +153,6 @@ fun SearchScreen(
                     }
                 }
             } else if (searchResults.isNotEmpty()) {
-                // Search results from Spotify
                 LazyColumn(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -169,17 +170,14 @@ fun SearchScreen(
                     item { Spacer(Modifier.height(80.dp)) }
                 }
             } else if (searchQuery.length >= 2 && !isSearching) {
-                // No results for query
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                     Text("No results for \"$searchQuery\"", color = Color.Gray, fontSize = 14.sp)
                 }
             } else {
-                // Browse: recent searches + mood categories
                 LazyColumn(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Recent searches
                     if (recentSearches.isNotEmpty()) {
                         item {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -203,7 +201,6 @@ fun SearchScreen(
                         item { Spacer(Modifier.height(8.dp)) }
                     }
 
-                    // Mood categories
                     item {
                         Text("Browse by mood", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Gray,
                             modifier = Modifier.padding(bottom = 4.dp))

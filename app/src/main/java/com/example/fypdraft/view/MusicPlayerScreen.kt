@@ -20,11 +20,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.fypdraft.ui.theme.AppThemeState
+import com.example.fypdraft.ui.theme.animatedMoodBrush
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 
 @Composable
 fun MusicPlayerScreen(
     viewModel: MusicPlayerViewModel,
+    themeState: AppThemeState = AppThemeState(),
     onBack: () -> Unit = {}
 ) {
     val playerState by viewModel.playerState.collectAsState()
@@ -34,12 +37,11 @@ fun MusicPlayerScreen(
     val playbackError by viewModel.playbackError.collectAsState()
     val currentTrack = playerState.currentTrack
 
-    val bgBrush = Brush.verticalGradient(
-        colors = listOf(Color(0xFF6794D2), Color(0xFF354C6C), Color.Black)
-    )
+    // Use animated mood brush with a dark overlay for readability
+    val moodBrush = animatedMoodBrush(themeState)
 
     if (currentTrack == null) {
-        Box(Modifier.fillMaxSize().background(bgBrush), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(moodBrush), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = Color.White)
                 Spacer(Modifier.height(16.dp))
@@ -49,7 +51,10 @@ fun MusicPlayerScreen(
         return
     }
 
-    Box(Modifier.fillMaxSize().background(bgBrush)) {
+    Box(Modifier.fillMaxSize().background(moodBrush)) {
+        // Dark overlay for text readability
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
+
         Column(
             Modifier.fillMaxSize().padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -82,7 +87,10 @@ fun MusicPlayerScreen(
                         AsyncImage(model = artUrl, contentDescription = "Album Art", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     } else {
                         Box(
-                            Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color(0xFF6A5ACD), Color(0xFF2E1065)))),
+                            Modifier.fillMaxSize().background(Brush.radialGradient(listOf(
+                                themeState.activePalette.glowColor.copy(alpha = 0.6f),
+                                themeState.activePalette.accent.copy(alpha = 0.3f)
+                            ))),
                             contentAlignment = Alignment.Center
                         ) { Text("🎵", fontSize = 80.sp) }
                     }
@@ -102,7 +110,7 @@ fun MusicPlayerScreen(
 
             // AI emotion badge
             if (isAnalyzingEmotion) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color.Magenta.copy(alpha = 0.2f)), modifier = Modifier.fillMaxWidth()) {
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.15f)), modifier = Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
@@ -110,7 +118,7 @@ fun MusicPlayerScreen(
                     }
                 }
             } else if (currentSongEmotion != null) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color.Magenta.copy(alpha = 0.2f)), modifier = Modifier.fillMaxWidth()) {
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.15f)), modifier = Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(currentSongEmotion!!.emoji, fontSize = 20.sp)
                         Spacer(Modifier.width(8.dp))
@@ -139,14 +147,6 @@ fun MusicPlayerScreen(
                     Spacer(Modifier.width(8.dp))
                     Text("Playing via Spotify", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
                 }
-            } else {
-                Card(colors = CardDefaults.cardColors(containerColor = Color.Yellow.copy(alpha = 0.2f)), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Info, null, tint = Color.Yellow)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Spotify not connected. Go to Settings to connect.", color = Color.White, fontSize = 12.sp)
-                    }
-                }
             }
 
             Spacer(Modifier.height(16.dp))
@@ -163,7 +163,6 @@ fun MusicPlayerScreen(
                         inactiveTrackColor = Color.White.copy(alpha = 0.3f)
                     )
                 )
-
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(formatDuration(playerState.currentPosition), color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
                     Text(formatDuration(playerState.duration), color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
@@ -178,10 +177,7 @@ fun MusicPlayerScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                IconButton(
-                    onClick = { viewModel.playPrevious() },
-                    enabled = playerState.currentIndex > 0 || spotifyConnected
-                ) {
+                IconButton(onClick = { viewModel.playPrevious() }, enabled = playerState.currentIndex > 0 || spotifyConnected) {
                     Icon(Icons.Default.SkipPrevious, "Previous",
                         tint = if (playerState.currentIndex > 0 || spotifyConnected) Color.White else Color.Gray,
                         modifier = Modifier.size(40.dp))
@@ -190,7 +186,7 @@ fun MusicPlayerScreen(
                 FloatingActionButton(
                     onClick = { viewModel.togglePlayPause() },
                     modifier = Modifier.size(72.dp),
-                    containerColor = if (spotifyConnected) Color.White else Color.Gray
+                    containerColor = Color.White
                 ) {
                     Icon(
                         if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -199,10 +195,7 @@ fun MusicPlayerScreen(
                     )
                 }
 
-                IconButton(
-                    onClick = { viewModel.playNext() },
-                    enabled = playerState.currentIndex < playerState.playlist.size - 1 || spotifyConnected
-                ) {
+                IconButton(onClick = { viewModel.playNext() }, enabled = playerState.currentIndex < playerState.playlist.size - 1 || spotifyConnected) {
                     Icon(Icons.Default.SkipNext, "Next",
                         tint = if (playerState.currentIndex < playerState.playlist.size - 1 || spotifyConnected) Color.White else Color.Gray,
                         modifier = Modifier.size(40.dp))
@@ -231,7 +224,5 @@ fun MusicPlayerScreen(
 
 private fun formatDuration(ms: Long): String {
     val totalSecs = ms / 1000
-    val mins = totalSecs / 60
-    val secs = totalSecs % 60
-    return "%d:%02d".format(mins, secs)
+    return "%d:%02d".format(totalSecs / 60, totalSecs % 60)
 }
