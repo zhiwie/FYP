@@ -335,12 +335,62 @@ private fun SmallTrackCard(track: Track, all: List<Track>, vm: MusicPlayerViewMo
 }
 
 @Composable
-fun BottomNavBar(currentTab: Int, onHome: () -> Unit, onSearch: () -> Unit, onFriends: () -> Unit, onLibrary: () -> Unit) {
-    NavigationBar(containerColor = Color.White) {
-        NavigationBarItem(selected = currentTab == 0, onClick = onHome, icon = { Icon(Icons.Filled.Home, "Home") }, label = { Text("Home", fontSize = 11.sp) })
-        NavigationBarItem(selected = currentTab == 1, onClick = onSearch, icon = { Icon(Icons.Filled.Search, "Search") }, label = { Text("Search", fontSize = 11.sp) })
-        NavigationBarItem(selected = currentTab == 2, onClick = onFriends, icon = { Icon(Icons.Filled.People, "Friends") }, label = { Text("Friends", fontSize = 11.sp) })
-        NavigationBarItem(selected = currentTab == 3, onClick = onLibrary, icon = { Icon(Icons.Filled.LibraryMusic, "Library") }, label = { Text("Library", fontSize = 11.sp) })
+fun BottomNavBar(
+    currentTab: Int,
+    onHome: () -> Unit,
+    onSearch: () -> Unit,
+    onFriends: () -> Unit,
+    onLibrary: () -> Unit
+) {
+    val navItems = listOf(
+        Triple(Icons.Filled.Home,         "Home",    onHome),
+        Triple(Icons.Filled.Search,       "Search",  onSearch),
+        Triple(Icons.Filled.People,       "Friends", onFriends),
+        Triple(Icons.Filled.LibraryMusic, "Library", onLibrary)
+    )
+
+    Column {
+        // Slim separator line above the nav bar
+        HorizontalDivider(
+            thickness = 0.6.dp,
+            color = Color.Black.copy(alpha = 0.10f)
+        )
+        NavigationBar(
+            containerColor = Color(0xFFF8F6F3),   // warm off-white — not pure white
+            tonalElevation = 0.dp,                 // removes Material tonal tinting
+            modifier = Modifier.height(64.dp)
+        ) {
+            navItems.forEachIndexed { index, (icon, label, action) ->
+                val selected = currentTab == index
+                NavigationBarItem(
+                    selected = selected,
+                    onClick = action,
+                    icon = {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = label,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = label,
+                            fontSize = 10.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            maxLines = 1
+                        )
+                    },
+                    alwaysShowLabel = true,
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor   = Color(0xFF1A1A2E),
+                        selectedTextColor   = Color(0xFF1A1A2E),
+                        unselectedIconColor = Color(0xFF9E9E9E),
+                        unselectedTextColor = Color(0xFF9E9E9E),
+                        indicatorColor      = Color(0xFF1A1A2E).copy(alpha = 0.10f)
+                    )
+                )
+            }
+        }
     }
 }
 
