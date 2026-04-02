@@ -17,7 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.fypdraft.data.repository.MockTrack
+import com.example.fypdraft.data.repository.TopTrack
 import com.example.fypdraft.viewmodel.SpotifyViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -37,7 +37,7 @@ fun SpotifyConnectionScreen(
     }
 
     // Fetch top tracks on IO thread when connected
-    var topTracks by remember { mutableStateOf<List<MockTrack>>(emptyList()) }
+    var topTracks by remember { mutableStateOf<List<TopTrack>>(emptyList()) }
     var tracksLoading by remember { mutableStateOf(false) }
 
     LaunchedEffect(authState.isAuthenticated) {

@@ -6,7 +6,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import com.example.fypdraft.data.repository.SpotifyRepository
 import com.example.fypdraft.data.repository.SpotifyAuthState
-import com.example.fypdraft.data.repository.MockTrack
+import com.example.fypdraft.data.repository.TopTrack
 import com.spotify.sdk.android.auth.AuthorizationClient
 import com.spotify.sdk.android.auth.AuthorizationRequest
 import com.spotify.sdk.android.auth.AuthorizationResponse
@@ -78,6 +78,6 @@ class SpotifyViewModel(private val context: Context) : ViewModel() {
     fun restoreAuthState() = repository.restoreAuthState()
     fun isSpotifyConnected(): Boolean = repository.isAuthenticated()
     fun disconnectSpotify() = repository.signOut()
-    fun getUserTopTracks(): List<MockTrack> = repository.getUserTopTracks()
+    fun getUserTopTracks(): List<TopTrack> = repository.getUserTopTracks()
     fun getAccessToken(): String? = repository.getAccessToken()
 }

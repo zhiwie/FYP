@@ -15,7 +15,7 @@ data class SpotifyAuthState(
     val isLoading: Boolean = false
 )
 
-data class MockTrack(
+data class TopTrack(
     val name: String,
     val artist: String,
     val album: String
@@ -173,7 +173,7 @@ class SpotifyRepository private constructor(private val context: Context) {
         _authState.value = SpotifyAuthState(isAuthenticated = false)
     }
 
-    fun getUserTopTracks(): List<MockTrack> {
+    fun getUserTopTracks(): List<TopTrack> {
         val token = getAccessToken() ?: return emptyList()
 
         return try {
@@ -194,11 +194,11 @@ class SpotifyRepository private constructor(private val context: Context) {
 
             val json = JSONObject(body)
             val items = json.getJSONArray("items")
-            val tracks = mutableListOf<MockTrack>()
+            val tracks = mutableListOf<TopTrack>()
 
             for (i in 0 until items.length()) {
                 val track = items.getJSONObject(i)
-                tracks.add(MockTrack(
+                tracks.add(TopTrack(
                     name = track.getString("name"),
                     artist = track.getJSONArray("artists").getJSONObject(0).getString("name"),
                     album = track.getJSONObject("album").getString("name")
