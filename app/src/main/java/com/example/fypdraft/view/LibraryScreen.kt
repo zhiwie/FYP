@@ -96,7 +96,8 @@ fun LibraryScreen(
                 onHome = onNavigateToHome,
                 onSearch = onNavigateToSearch,
                 onFriends = onNavigateToFriends,
-                onLibrary = { }
+                onLibrary = { },
+                themeState = themeState
             )
         }
     ) { padding ->

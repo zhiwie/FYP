@@ -116,7 +116,7 @@ fun SearchScreen(
 
     Scaffold(
         bottomBar = {
-            BottomNavBar(currentTab, onHome = onNavigateToHome, onSearch = {}, onFriends = onNavigateToFriends, onLibrary = onNavigateToLibrary)
+            BottomNavBar(currentTab, onHome = onNavigateToHome, onSearch = {}, onFriends = onNavigateToFriends, onLibrary = onNavigateToLibrary, themeState = themeState)
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)) {

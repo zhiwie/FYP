@@ -88,7 +88,7 @@ fun FriendsScreen(
 
     Scaffold(
         bottomBar = {
-            BottomNavBar(currentTab, onNavigateToHome, onNavigateToSearch, {}, onNavigateToLibrary)
+            BottomNavBar(currentTab, onNavigateToHome, onNavigateToSearch, {}, onNavigateToLibrary, themeState = themeState)
         },
         floatingActionButton = {
             // Vibe Check button (like BeReal's capture button)
