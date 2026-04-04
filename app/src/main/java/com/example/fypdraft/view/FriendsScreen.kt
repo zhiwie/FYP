@@ -1,6 +1,9 @@
 package com.example.fypdraft.view
 
+import android.Manifest
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -25,7 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -33,15 +36,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import com.example.fypdraft.data.repository.FriendProfile
 import com.example.fypdraft.data.repository.FriendChatMessage
+import com.example.fypdraft.data.repository.FriendProfile
+import com.example.fypdraft.data.repository.FriendSuggestion
 import com.example.fypdraft.data.repository.MusicMoment
 import com.example.fypdraft.data.repository.SocialRepository
 import com.example.fypdraft.ui.theme.AppThemeState
 import com.example.fypdraft.ui.theme.animatedMoodBrushLight
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 @Composable
 fun FriendsScreen(
@@ -56,6 +60,7 @@ fun FriendsScreen(
 ) {
     val scope      = rememberCoroutineScope()
     val socialRepo = remember { SocialRepository() }
+    val context    = LocalContext.current
 
     var friends             by remember { mutableStateOf<List<FriendProfile>>(emptyList()) }
     var myMoment            by remember { mutableStateOf<MusicMoment?>(null) }
@@ -63,9 +68,7 @@ fun FriendsScreen(
     var showAddDialog       by remember { mutableStateOf(false) }
     var showVibeCheckDialog by remember { mutableStateOf(false) }
     var addError            by remember { mutableStateOf<String?>(null) }
-
-    // The friend whose chat is open (null = feed view)
-    var chatFriend by remember { mutableStateOf<FriendProfile?>(null) }
+    var chatFriend          by remember { mutableStateOf<FriendProfile?>(null) }
 
     LaunchedEffect(Unit) {
         isLoading = true
@@ -87,9 +90,7 @@ fun FriendsScreen(
         }
     }
 
-    // Slide the chat panel over the feed when a friend is selected
     Box(Modifier.fillMaxSize()) {
-        // ── Main feed ────────────────────────────────────────────────
         Scaffold(
             bottomBar = {
                 BottomNavBar(currentTab, onNavigateToHome, onNavigateToSearch,
@@ -116,7 +117,6 @@ fun FriendsScreen(
                     .background(animatedMoodBrushLight(themeState))
                     .padding(padding)
             ) {
-                // Header
                 Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Column {
@@ -138,7 +138,7 @@ fun FriendsScreen(
                 } else {
                     LazyColumn(contentPadding = PaddingValues(bottom = 100.dp)) {
 
-                        // Story circles — tap to open chat
+                        // Story circles
                         if (friends.isNotEmpty()) {
                             item {
                                 LazyRow(
@@ -146,8 +146,8 @@ fun FriendsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                                 ) {
                                     item {
-                                        StoryCircle("You","Me", isPlaying,
-                                            myMoment!=null, Color(0xFF1DB954)) {
+                                        StoryCircle("You", "Me", isPlaying,
+                                            myMoment != null, Color(0xFF1DB954)) {
                                             if (currentTrack != null) showVibeCheckDialog = true
                                         }
                                     }
@@ -158,7 +158,7 @@ fun FriendsScreen(
                                             isOnline     = f.isOnline,
                                             hasNewMoment = f.currentMoment != null,
                                             accentColor  = getMoodColor(f.currentMoment?.mood ?: "neutral"),
-                                            onClick      = { chatFriend = f }   // ← opens chat
+                                            onClick      = { chatFriend = f }
                                         )
                                     }
                                 }
@@ -185,15 +185,15 @@ fun FriendsScreen(
                             }
                             items(withMoments, key = { it.uid }) { f ->
                                 MomentCard(
-                                    moment   = f.currentMoment!!,
-                                    isOwn    = false,
-                                    onReact  = { emoji ->
+                                    moment  = f.currentMoment!!,
+                                    isOwn   = false,
+                                    onReact = { emoji ->
                                         scope.launch {
                                             socialRepo.reactToMoment(f.uid, emoji)
                                             friends = socialRepo.getFriendsWithProfiles()
                                         }
                                     },
-                                    onPlay   = {
+                                    onPlay  = {
                                         f.currentMoment?.let { m ->
                                             musicPlayerViewModel?.playFromRecommendation(
                                                 m.trackTitle, m.trackArtist) { ok, _ ->
@@ -206,7 +206,6 @@ fun FriendsScreen(
                             }
                         }
 
-                        // Friends list with chat button
                         item {
                             Text("All Friends", fontSize = 15.sp, fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
@@ -226,7 +225,7 @@ fun FriendsScreen(
             }
         }
 
-        // ── Chat panel (slides in from right) ────────────────────────
+        // Chat panel slides in from the right
         AnimatedVisibility(
             visible = chatFriend != null,
             enter   = slideInHorizontally(initialOffsetX = { it }),
@@ -241,7 +240,7 @@ fun FriendsScreen(
                     onBack       = { chatFriend = null },
                     onPlayFriend = {
                         friend.currentMoment?.let { m ->
-                            musicPlayerViewModel?.playFromRecommendation(m.trackTitle, m.trackArtist) { ok,_ ->
+                            musicPlayerViewModel?.playFromRecommendation(m.trackTitle, m.trackArtist) { ok, _ ->
                                 if (ok) onNavigateToMusicPlayer()
                             }
                         }
@@ -251,7 +250,6 @@ fun FriendsScreen(
         }
     }
 
-    // Dialogs
     if (showVibeCheckDialog && currentTrack != null) {
         VibeCheckDialog(
             trackTitle  = currentTrack.name,
@@ -268,17 +266,40 @@ fun FriendsScreen(
             }
         )
     }
+
     if (showAddDialog) {
-        AddFriendDialog(error = addError, onDismiss = { showAddDialog = false; addError = null },
-            onAdd = { username ->
+        AddFriendDialog(
+            socialRepo = socialRepo,
+            error      = addError,
+            onDismiss  = { showAddDialog = false; addError = null },
+            onAdd      = { username ->
                 scope.launch {
                     socialRepo.addFriend(username).fold(
-                        onSuccess = { showAddDialog = false; addError = null
-                            friends = socialRepo.getFriendsWithProfiles() },
+                        onSuccess = {
+                            showAddDialog = false; addError = null
+                            friends = socialRepo.getFriendsWithProfiles()
+                        },
                         onFailure = { addError = it.message }
                     )
                 }
-            })
+            },
+            onAddByUid = { uid ->
+                // Adding a suggestion — look up their username first
+                scope.launch {
+                    val doc = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                        .collection("users").document(uid).get()
+                        .await()
+                    val uname = doc.getString("username") ?: return@launch
+                    socialRepo.addFriend(uname).fold(
+                        onSuccess = {
+                            showAddDialog = false; addError = null
+                            friends = socialRepo.getFriendsWithProfiles()
+                        },
+                        onFailure = { addError = it.message }
+                    )
+                }
+            }
+        )
     }
 }
 
@@ -294,9 +315,9 @@ private fun FriendChatPanel(
     onBack: () -> Unit,
     onPlayFriend: () -> Unit
 ) {
-    val scope       = rememberCoroutineScope()
-    val focusMgr    = LocalFocusManager.current
-    val listState   = rememberLazyListState()
+    val scope     = rememberCoroutineScope()
+    val focusMgr  = LocalFocusManager.current
+    val listState = rememberLazyListState()
 
     var messages  by remember { mutableStateOf<List<FriendChatMessage>>(emptyList()) }
     var inputText by remember { mutableStateOf("") }
@@ -308,8 +329,6 @@ private fun FriendChatPanel(
         isLoading = false
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
-
-    // Auto-scroll when new messages arrive
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
@@ -344,26 +363,17 @@ private fun FriendChatPanel(
                     }
                 },
                 actions = {
-                    // "What they're playing" shortcut
                     if (friend.currentMoment != null) {
-                        IconButton(onClick = onPlayFriend) {
-                            Text("▶🎵", fontSize = 16.sp)
-                        }
+                        IconButton(onClick = onPlayFriend) { Text("▶🎵", fontSize = 16.sp) }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
             )
         },
         bottomBar = {
-            // Chat input
-            Surface(
-                color = Color.White,
-                shadowElevation = 4.dp
-            ) {
+            Surface(color = Color.White, shadowElevation = 4.dp) {
                 Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
                         .navigationBarsPadding(),
                     verticalAlignment = Alignment.Bottom
                 ) {
@@ -371,16 +381,17 @@ private fun FriendChatPanel(
                         value         = inputText,
                         onValueChange = { inputText = it },
                         modifier      = Modifier.weight(1f),
-                        placeholder   = { Text("Message ${friend.displayName.split(" ").first()}…",
-                            color = Color.Gray) },
-                        shape         = RoundedCornerShape(24.dp),
-                        maxLines      = 4,
+                        placeholder   = {
+                            Text("Message ${friend.displayName.split(" ").first()}…",
+                                color = Color.Gray)
+                        },
+                        shape   = RoundedCornerShape(24.dp),
+                        maxLines = 4,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(onSend = {
-                            if (inputText.isNotBlank()) {
-                                val msg = inputText.trim()
-                                inputText = ""
-                                focusMgr.clearFocus()
+                            val msg = inputText.trim()
+                            if (msg.isNotBlank()) {
+                                inputText = ""; focusMgr.clearFocus()
                                 scope.launch {
                                     socialRepo.sendChatMessage(friend.uid, msg)
                                     messages = socialRepo.getChatMessages(friend.uid)
@@ -393,20 +404,16 @@ private fun FriendChatPanel(
                         )
                     )
                     Spacer(Modifier.width(8.dp))
-                    // Share current track button
                     if (currentTrack != null && isPlaying) {
                         IconButton(
                             onClick = {
                                 scope.launch {
-                                    socialRepo.sendChatMessage(
-                                        friend.uid,
-                                        "🎵 I'm listening to: ${currentTrack.name} — ${currentTrack.artist}"
-                                    )
+                                    socialRepo.sendChatMessage(friend.uid,
+                                        "🎵 I'm listening to: ${currentTrack.name} — ${currentTrack.artist}")
                                     messages = socialRepo.getChatMessages(friend.uid)
                                 }
                             },
-                            modifier = Modifier.size(44.dp).clip(CircleShape)
-                                .background(Color(0xFF1DB954))
+                            modifier = Modifier.size(44.dp).clip(CircleShape).background(Color(0xFF1DB954))
                         ) { Text("🎵", fontSize = 18.sp) }
                         Spacer(Modifier.width(6.dp))
                     }
@@ -414,8 +421,7 @@ private fun FriendChatPanel(
                         onClick = {
                             val msg = inputText.trim()
                             if (msg.isNotBlank()) {
-                                inputText = ""
-                                focusMgr.clearFocus()
+                                inputText = ""; focusMgr.clearFocus()
                                 scope.launch {
                                     socialRepo.sendChatMessage(friend.uid, msg)
                                     messages = socialRepo.getChatMessages(friend.uid)
@@ -433,32 +439,27 @@ private fun FriendChatPanel(
             }
         }
     ) { padding ->
-        if (isLoading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+        when {
+            isLoading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color(0xFF1DB954))
             }
-        } else if (messages.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+            messages.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("👋", fontSize = 48.sp)
                     Spacer(Modifier.height(12.dp))
                     Text("Say hi to ${friend.displayName.split(" ").first()}!",
                         fontSize = 16.sp, fontWeight = FontWeight.Medium, color = Color.Gray)
                     Spacer(Modifier.height(6.dp))
-                    Text("Share what you're listening to 🎵",
-                        fontSize = 13.sp, color = Color.LightGray)
+                    Text("Share what you're listening to 🎵", fontSize = 13.sp, color = Color.LightGray)
                 }
             }
-        } else {
-            LazyColumn(
+            else -> LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(messages, key = { it.id }) { msg ->
-                    ChatMessageBubble(msg)
-                }
+                items(messages, key = { it.id }) { msg -> ChatMessageBubble(msg) }
             }
         }
     }
@@ -467,64 +468,43 @@ private fun FriendChatPanel(
 @Composable
 private fun ChatMessageBubble(msg: FriendChatMessage) {
     val isMe = msg.isFromMe
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start
-    ) {
-        Column(
-            Modifier.widthIn(max = 280.dp),
-            horizontalAlignment = if (isMe) Alignment.End else Alignment.Start
-        ) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start) {
+        Column(Modifier.widthIn(max = 280.dp),
+            horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
             Box(
-                Modifier
-                    .clip(
-                        RoundedCornerShape(
-                            topStart = if (isMe) 18.dp else 4.dp,
-                            topEnd   = if (isMe) 4.dp else 18.dp,
-                            bottomStart = 18.dp, bottomEnd = 18.dp
-                        )
-                    )
+                Modifier.clip(RoundedCornerShape(
+                    topStart = if (isMe) 18.dp else 4.dp,
+                    topEnd   = if (isMe) 4.dp else 18.dp,
+                    bottomStart = 18.dp, bottomEnd = 18.dp))
                     .background(if (isMe) Color(0xFF1DB954) else Color.White)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Text(
-                    msg.text,
-                    color    = if (isMe) Color.White else Color.Black,
-                    fontSize = 14.sp, lineHeight = 20.sp
-                )
+                Text(msg.text, color = if (isMe) Color.White else Color.Black,
+                    fontSize = 14.sp, lineHeight = 20.sp)
             }
-            Text(
-                formatTimeAgo(msg.timestamp),
-                fontSize = 10.sp, color = Color.LightGray,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-            )
+            Text(formatTimeAgo(msg.timestamp), fontSize = 10.sp, color = Color.LightGray,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
         }
     }
 }
 
 @Composable
 private fun FriendRow(friend: FriendProfile, onChat: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clickable { onChat() }
-            .padding(horizontal = 20.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            Modifier.size(44.dp).clip(CircleShape)
-                .background(getMoodColor(friend.currentMoment?.mood ?: "neutral").copy(alpha = 0.2f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(friend.displayName.take(1).uppercase(),
-                fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                color = getMoodColor(friend.currentMoment?.mood ?: "neutral"))
+    Row(Modifier.fillMaxWidth().clickable { onChat() }.padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(44.dp).clip(CircleShape)
+            .background(getMoodColor(friend.currentMoment?.mood ?: "neutral").copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center) {
+            Text(friend.displayName.take(1).uppercase(), fontWeight = FontWeight.Bold,
+                fontSize = 18.sp, color = getMoodColor(friend.currentMoment?.mood ?: "neutral"))
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(friend.displayName, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             friend.currentMoment?.let {
-                Text("🎵 ${it.trackTitle}", fontSize = 11.sp, color = Color.Gray, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
+                Text("🎵 ${it.trackTitle}", fontSize = 11.sp, color = Color.Gray,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             } ?: Text(if (friend.lastActive > 0) "Last seen ${formatTimeAgo(friend.lastActive)}"
             else "Never active", fontSize = 11.sp, color = Color.Gray)
         }
@@ -532,17 +512,173 @@ private fun FriendRow(friend: FriendProfile, onChat: () -> Unit) {
     }
 }
 
-// ── Reused components (Story, MomentCard, etc.) ──────────────────────────
+// ── Add friend dialog — Options A + B + C ─────────────────────────────────
+
+@Composable
+private fun AddFriendDialog(
+    socialRepo: SocialRepository,
+    error: String?,
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit,
+    onAddByUid: (String) -> Unit
+) {
+    val scope   = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    var username     by remember { mutableStateOf("") }
+    var suggestions  by remember { mutableStateOf<List<FriendSuggestion>>(emptyList()) }
+    var loadingSugg  by remember { mutableStateOf(false) }
+    var contactsAsked by remember { mutableStateOf(false) }
+
+    // Load Option B suggestions immediately (no permission needed)
+    LaunchedEffect(Unit) {
+        loadingSugg = true
+        suggestions = socialRepo.getMutualFriendSuggestions()
+        loadingSugg = false
+    }
+
+    // Option C — contact permission launcher
+    val contactPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        contactsAsked = true
+        if (granted) {
+            scope.launch {
+                loadingSugg = true
+                socialRepo.uploadContactHashes(context)
+                suggestions = socialRepo.getAllSuggestions(context)
+                loadingSugg = false
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add a friend", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+
+                // ── Option A: username search ────────────────────────
+                Text("Search by username", fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold, color = Color.Gray)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value         = username,
+                    onValueChange = { username = it },
+                    placeholder   = { Text("Username") },
+                    singleLine    = true,
+                    shape         = RoundedCornerShape(12.dp),
+                    modifier      = Modifier.fillMaxWidth(),
+                    leadingIcon   = { Icon(Icons.Filled.Search, null) }
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(error, color = Color.Red, fontSize = 12.sp)
+                }
+
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(12.dp))
+
+                // ── Options B + C: suggestions ───────────────────────
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("People you might know", fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold, color = Color.Gray,
+                        modifier = Modifier.weight(1f))
+                    // Option C button — ask for contacts permission
+                    if (!contactsAsked) {
+                        TextButton(
+                            onClick = {
+                                contactPermLauncher.launch(Manifest.permission.READ_CONTACTS)
+                            },
+                            contentPadding = PaddingValues(horizontal = 6.dp)
+                        ) {
+                            Icon(Icons.Filled.Contacts, null,
+                                modifier = Modifier.size(14.dp), tint = Color(0xFF1DB954))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Sync contacts", fontSize = 11.sp, color = Color(0xFF1DB954))
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                when {
+                    loadingSugg -> Box(Modifier.fillMaxWidth().height(60.dp),
+                        contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(24.dp), color = Color(0xFF1DB954))
+                    }
+                    suggestions.isEmpty() -> Text(
+                        "No suggestions yet — add more friends or sync contacts to find people you know.",
+                        fontSize = 12.sp, color = Color.Gray
+                    )
+                    else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        suggestions.take(5).forEach { sug ->
+                            SuggestionRow(suggestion = sug, onAdd = { onAddByUid(sug.uid) })
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick  = { if (username.isNotBlank()) onAdd(username.trim()) },
+                enabled  = username.isNotBlank(),
+                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A2E))
+            ) { Text("Add by username") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun SuggestionRow(suggestion: FriendSuggestion, onAdd: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFFF5F5FA))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Avatar
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).background(Color(0xFF1DB954).copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(suggestion.displayName.take(1).uppercase(),
+                fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1DB954))
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(suggestion.displayName, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            // Show the reason this person was suggested
+            val reason = when {
+                suggestion.matchedByPhone && suggestion.mutualFriendCount > 0 ->
+                    "📱 In your contacts · ${suggestion.mutualFriendCount} mutual friend${if (suggestion.mutualFriendCount > 1) "s" else ""}"
+                suggestion.matchedByPhone ->
+                    "📱 In your contacts"
+                suggestion.mutualFriendCount > 0 ->
+                    "${suggestion.mutualFriendCount} mutual friend${if (suggestion.mutualFriendCount > 1) "s" else ""}"
+                else -> "You might know this person"
+            }
+            Text(reason, fontSize = 11.sp, color = Color.Gray)
+        }
+        TextButton(
+            onClick  = onAdd,
+            colors   = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1DB954)),
+            contentPadding = PaddingValues(horizontal = 8.dp)
+        ) { Text("Add", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+    }
+}
+
+// ── Reused UI components ──────────────────────────────────────────────────
 
 @Composable
 private fun StoryCircle(
     name: String, initial: String, isOnline: Boolean,
     hasNewMoment: Boolean, accentColor: Color, onClick: () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable { onClick() }.width(64.dp)
-    ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable { onClick() }.width(64.dp)) {
         Box {
             Box(
                 modifier = Modifier.size(56.dp)
@@ -594,16 +730,24 @@ private fun MomentCard(
                             fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                         Spacer(Modifier.width(6.dp))
                         Text(moment.moodEmoji, fontSize = 12.sp)
+                        if (moment.isVibeCheck) {
+                            Spacer(Modifier.width(6.dp))
+                            Surface(shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF1DB954).copy(alpha = 0.15f)) {
+                                Text("VIBE CHECK", Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1DB954))
+                            }
+                        }
                     }
                     Text(formatTimeAgo(moment.timestamp), fontSize = 11.sp, color = Color.Gray)
                 }
             }
             Row(Modifier.fillMaxWidth().padding(12.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(Brush.horizontalGradient(listOf(moodColor.copy(alpha=0.1f), Color(0xFFF8F8FA))))
+                .background(Brush.horizontalGradient(listOf(moodColor.copy(alpha = 0.1f), Color(0xFFF8F8FA))))
                 .clickable { onPlay() }.padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(moodColor.copy(alpha=0.2f)),
+                Box(Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(moodColor.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center) { Text("🎵", fontSize = 24.sp) }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -631,9 +775,8 @@ private fun MomentCard(
                 }
                 Spacer(Modifier.weight(1f))
                 if (!isOwn) {
-                    IconButton(onClick = { showReactions = !showReactions }, modifier = Modifier.size(32.dp)) {
-                        Text("😊", fontSize = 18.sp)
-                    }
+                    IconButton(onClick = { showReactions = !showReactions },
+                        modifier = Modifier.size(32.dp)) { Text("😊", fontSize = 18.sp) }
                 }
             }
             AnimatedVisibility(visible = showReactions) {
@@ -656,8 +799,7 @@ private fun MomentCard(
 private fun EmptyFriendsState(onAdd: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("👥", fontSize = 56.sp)
-        Spacer(Modifier.height(16.dp))
+        Text("👥", fontSize = 56.sp); Spacer(Modifier.height(16.dp))
         Text("No friends yet", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text("Add friends to share music vibes!", fontSize = 14.sp,
@@ -696,7 +838,8 @@ private fun VibeCheckDialog(
 ) {
     var caption by remember { mutableStateOf("") }
     var selectedMood by remember { mutableStateOf("happy") }
-    val moods = listOf("happy" to "😊","energetic" to "⚡","calm" to "😌","sad" to "😢","focused" to "🎯","romantic" to "💕")
+    val moods = listOf("happy" to "😊","energetic" to "⚡","calm" to "😌",
+        "sad" to "😢","focused" to "🎯","romantic" to "💕")
     AlertDialog(onDismissRequest = onDismiss,
         title = { Text("Share Your Vibe 🎵", fontWeight = FontWeight.Bold) },
         text = {
@@ -704,7 +847,8 @@ private fun VibeCheckDialog(
                 Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5)),
                     shape = RoundedCornerShape(12.dp)) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1DB954).copy(alpha=0.2f)),
+                        Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF1DB954).copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center) { Text("🎵", fontSize = 20.sp) }
                         Spacer(Modifier.width(10.dp))
                         Column {
@@ -719,18 +863,21 @@ private fun VibeCheckDialog(
                 Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
                     moods.forEach { (mood, emoji) ->
                         Surface(shape = CircleShape,
-                            color = if (selectedMood == mood) getMoodColor(mood).copy(alpha=0.2f) else Color(0xFFF0F0F0),
+                            color = if (selectedMood == mood) getMoodColor(mood).copy(alpha = 0.2f)
+                            else Color(0xFFF0F0F0),
                             modifier = Modifier.clickable { selectedMood = mood }
-                                .then(if (selectedMood == mood) Modifier.border(2.dp, getMoodColor(mood), CircleShape) else Modifier)) {
-                            Text(emoji, Modifier.padding(10.dp), fontSize = 20.sp)
-                        }
+                                .then(if (selectedMood == mood)
+                                    Modifier.border(2.dp, getMoodColor(mood), CircleShape)
+                                else Modifier)
+                        ) { Text(emoji, Modifier.padding(10.dp), fontSize = 20.sp) }
                     }
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(value = caption, onValueChange = { if (it.length <= 120) caption = it },
                     placeholder = { Text("Add a caption...") }, shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(), maxLines = 3, singleLine = false)
-                Text("${caption.length}/120", fontSize = 10.sp, color = Color.Gray, modifier = Modifier.align(Alignment.End))
+                Text("${caption.length}/120", fontSize = 10.sp, color = Color.Gray,
+                    modifier = Modifier.align(Alignment.End))
             }
         },
         confirmButton = {
@@ -743,43 +890,20 @@ private fun VibeCheckDialog(
     )
 }
 
-@Composable
-private fun AddFriendDialog(error: String?, onDismiss: () -> Unit, onAdd: (String) -> Unit) {
-    var username by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss,
-        title = { Text("Add a friend", fontWeight = FontWeight.Bold) },
-        text = {
-            Column {
-                Text("Enter their MoodSync username:", fontSize = 14.sp, color = Color.Gray)
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(value = username, onValueChange = { username = it },
-                    placeholder = { Text("Username") }, singleLine = true,
-                    shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth())
-                if (error != null) { Spacer(Modifier.height(8.dp)); Text(error, color = Color.Red, fontSize = 13.sp) }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { if (username.isNotBlank()) onAdd(username) }, enabled = username.isNotBlank()) {
-                Text("Add", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
 private fun getMoodColor(mood: String): Color = when (mood) {
-    "happy" -> Color(0xFFFFB347); "sad" -> Color(0xFF667EEA); "calm" -> Color(0xFF89CFF0)
-    "energetic" -> Color(0xFFFF416C); "tired" -> Color(0xFF607D8B)
-    "focused" -> Color(0xFF11998E); "romantic" -> Color(0xFFEE9CA7); else -> Color(0xFF1DB954)
+    "happy"     -> Color(0xFFFFB347); "sad"      -> Color(0xFF667EEA)
+    "calm"      -> Color(0xFF89CFF0); "energetic" -> Color(0xFFFF416C)
+    "tired"     -> Color(0xFF607D8B); "focused"   -> Color(0xFF11998E)
+    "romantic"  -> Color(0xFFEE9CA7); else        -> Color(0xFF1DB954)
 }
 
 private fun formatTimeAgo(timestamp: Long): String {
     if (timestamp == 0L) return ""
     val diff = System.currentTimeMillis() - timestamp
     return when {
-        diff < 60_000    -> "just now"
-        diff < 3_600_000 -> "${diff / 60_000}m ago"
+        diff < 60_000     -> "just now"
+        diff < 3_600_000  -> "${diff / 60_000}m ago"
         diff < 86_400_000 -> "${diff / 3_600_000}h ago"
-        else             -> "${diff / 86_400_000}d ago"
+        else              -> "${diff / 86_400_000}d ago"
     }
 }

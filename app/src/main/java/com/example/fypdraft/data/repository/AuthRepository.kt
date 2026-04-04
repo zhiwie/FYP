@@ -7,6 +7,7 @@ import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
+import java.security.MessageDigest
 
 data class AuthResult(
     val success: Boolean,
@@ -15,221 +16,146 @@ data class AuthResult(
 )
 
 class AuthRepository {
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
-    private val firestore: FirebaseFirestore = FirebaseFirestore.getInstance()
+    private val auth      = FirebaseAuth.getInstance()
+    private val firestore = FirebaseFirestore.getInstance()
 
     companion object {
-        private const val TAG = "AuthRepository"
-        private const val TIMEOUT_MS = 10000L // 10 seconds timeout
+        private const val TAG        = "AuthRepository"
+        private const val TIMEOUT_MS = 10_000L
     }
 
     fun getCurrentUser(): FirebaseUser? = auth.currentUser
+    fun isUserLoggedIn(): Boolean       = auth.currentUser != null
 
-    fun isUserLoggedIn(): Boolean = auth.currentUser != null
-
-    suspend fun signUp(
-        username: String,
-        email: String,
-        password: String
-    ): AuthResult {
+    // ── Sign up ───────────────────────────────────────────────────────
+    suspend fun signUp(username: String, email: String, password: String): AuthResult {
         return try {
             withTimeout(TIMEOUT_MS) {
-                // Validate password
-                if (!isPasswordValid(password)) {
-                    return@withTimeout AuthResult(
-                        success = false,
-                        message = "Password must be at least 6 characters and contain both letters and numbers"
-                    )
-                }
+                if (!isPasswordValid(password)) return@withTimeout AuthResult(
+                    false, "Password must be at least 6 characters and contain letters and numbers"
+                )
 
-                // Check if username already exists (with timeout)
-                val usernameExists = try {
-                    val querySnapshot = firestore.collection("users")
+                // Username uniqueness check
+                val taken = try {
+                    !firestore.collection("users")
                         .whereEqualTo("username", username.lowercase())
-                        .limit(1)
-                        .get()
-                        .await()
-                    !querySnapshot.isEmpty
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error checking username", e)
-                    false
-                }
+                        .limit(1).get().await().isEmpty
+                } catch (_: Exception) { false }
 
-                if (usernameExists) {
-                    return@withTimeout AuthResult(
-                        success = false,
-                        message = "Username already taken"
-                    )
-                }
+                if (taken) return@withTimeout AuthResult(false, "Username already taken")
 
-                // Create user
                 val result = auth.createUserWithEmailAndPassword(email, password).await()
-                val user = result.user
+                val user   = result.user ?: return@withTimeout AuthResult(false, "Failed to create account")
 
-                if (user != null) {
-                    try {
-                        // Update profile with username (non-blocking for user experience)
-                        val profileUpdates = UserProfileChangeRequest.Builder()
-                            .setDisplayName(username)
-                            .build()
-                        user.updateProfile(profileUpdates).await()
+                try {
+                    // Set Firebase Auth display name
+                    user.updateProfile(
+                        UserProfileChangeRequest.Builder().setDisplayName(username).build()
+                    ).await()
 
-                        // Save user data to Firestore with lowercase username for case-insensitive search
-                        val userData = hashMapOf(
-                            "username" to username.lowercase(),
-                            "displayName" to username,
-                            "email" to email.lowercase(),
-                            "createdAt" to System.currentTimeMillis(),
-                            "emailVerified" to false
-                        )
-                        firestore.collection("users").document(user.uid).set(userData).await()
+                    // ── Write the public profile to Firestore ─────────
+                    // This is the ONLY place you ever need to create the users/{uid} document.
+                    // Firestore creates the collection automatically on first write.
+                    // The fields written here are the ones friend-search queries rely on.
+                    val userData = hashMapOf(
+                        "uid"         to user.uid,
+                        "username"    to username.lowercase(),   // for Option A search
+                        "displayName" to username,
+                        "email"       to email.lowercase(),
+                        "createdAt"   to System.currentTimeMillis(),
+                        "emailVerified" to false,
+                        // phoneHash is null until user opts in to contact matching (Option C)
+                        // It is written later by SocialRepository.uploadContactHashes()
+                        "phoneHash"   to null
+                    )
+                    firestore.collection("users").document(user.uid).set(userData).await()
 
-                        // Send email verification (don't await - let it happen in background)
-                        user.sendEmailVerification()
+                    // Firestore does NOT require pre-creating the friends subcollection.
+                    // It is created automatically when the first friend is added via addFriend().
 
-                        AuthResult(
-                            success = true,
-                            message = "Account created! Please verify your email.",
-                            user = user
-                        )
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error in post-signup operations", e)
-                        // User is created but some operations failed
-                        AuthResult(
-                            success = true,
-                            message = "Account created successfully!",
-                            user = user
-                        )
-                    }
-                } else {
-                    AuthResult(success = false, message = "Failed to create account")
+                    user.sendEmailVerification()
+                    AuthResult(true, "Account created! Please verify your email.", user)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Post-signup ops failed", e)
+                    AuthResult(true, "Account created!", user)   // auth succeeded even if profile write fails
                 }
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            Log.e(TAG, "Sign up timeout", e)
-            AuthResult(success = false, message = "Sign up is taking too long. Please check your internet connection and try again.")
+            AuthResult(false, "Sign up timed out. Check your internet connection.")
         } catch (e: Exception) {
-            Log.e(TAG, "Sign up error", e)
-            val errorMessage = when {
+            Log.e(TAG, "signUp error", e)
+            AuthResult(false, when {
                 e.message?.contains("email address is already in use") == true ->
                     "This email is already registered"
                 e.message?.contains("network") == true ->
                     "Network error. Please check your connection."
                 else -> e.message ?: "Sign up failed"
-            }
-            AuthResult(success = false, message = errorMessage)
+            })
         }
     }
 
+    // ── Sign in ───────────────────────────────────────────────────────
     suspend fun signIn(emailOrUsername: String, password: String): AuthResult {
         return try {
             withTimeout(TIMEOUT_MS) {
                 val input = emailOrUsername.trim()
-
-                // Check if input is email or username
                 val email = if (input.contains("@")) {
                     input.lowercase()
                 } else {
-                    // Query Firestore to find email by username with timeout
-                    try {
-                        val querySnapshot = firestore.collection("users")
+                    // Option A: look up email by username
+                    val snap = try {
+                        firestore.collection("users")
                             .whereEqualTo("username", input.lowercase())
-                            .limit(1)
-                            .get()
-                            .await()
-
-                        if (querySnapshot.documents.isEmpty()) {
-                            return@withTimeout AuthResult(
-                                success = false,
-                                message = "User not found. Please check your username or email."
-                            )
-                        }
-                        querySnapshot.documents[0].getString("email")?.lowercase()
-                            ?: return@withTimeout AuthResult(
-                                success = false,
-                                message = "User data error. Please contact support."
-                            )
+                            .limit(1).get().await()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error querying username", e)
-                        return@withTimeout AuthResult(
-                            success = false,
-                            message = "Error finding user. Please check your connection."
-                        )
+                        Log.e(TAG, "Username lookup failed", e)
+                        return@withTimeout AuthResult(false, "Error finding user. Check your connection.")
                     }
+                    if (snap.documents.isEmpty())
+                        return@withTimeout AuthResult(false, "User not found. Check your username or email.")
+                    snap.documents[0].getString("email")?.lowercase()
+                        ?: return@withTimeout AuthResult(false, "User data error. Please contact support.")
                 }
 
                 val result = auth.signInWithEmailAndPassword(email, password).await()
-                val user = result.user
-
-                if (user != null) {
-                    // Optional: Skip email verification for faster testing
-                    // Remove this check if you want to enforce email verification
-                    /*
-                    if (!user.isEmailVerified) {
-                        return@withTimeout AuthResult(
-                            success = false,
-                            message = "Please verify your email before logging in"
-                        )
-                    }
-                    */
-
-                    AuthResult(
-                        success = true,
-                        message = "Login successful",
-                        user = user
-                    )
-                } else {
-                    AuthResult(success = false, message = "Login failed")
-                }
+                val user   = result.user
+                    ?: return@withTimeout AuthResult(false, "Login failed")
+                AuthResult(true, "Login successful", user)
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            Log.e(TAG, "Sign in timeout", e)
-            AuthResult(success = false, message = "Login is taking too long. Please check your internet connection.")
+            AuthResult(false, "Login timed out. Check your internet connection.")
         } catch (e: Exception) {
-            Log.e(TAG, "Sign in error", e)
-            val errorMessage = when {
-                e.message?.contains("no user record") == true ->
-                    "No account found with this email"
-                e.message?.contains("password is invalid") == true ||
-                        e.message?.contains("INVALID_LOGIN_CREDENTIALS") == true ->
-                    "Incorrect password"
-                e.message?.contains("network") == true ->
-                    "Network error. Please check your connection."
+            Log.e(TAG, "signIn error", e)
+            AuthResult(false, when {
+                e.message?.contains("no user record") == true           -> "No account found with this email"
+                e.message?.contains("password is invalid") == true
+                        || e.message?.contains("INVALID_LOGIN_CREDENTIALS") == true -> "Incorrect password"
+                e.message?.contains("network") == true                  -> "Network error. Check your connection."
                 else -> e.message ?: "Login failed"
-            }
-            AuthResult(success = false, message = errorMessage)
+            })
         }
     }
 
+    // ── Reset password ────────────────────────────────────────────────
     suspend fun resetPassword(email: String): AuthResult {
         return try {
             withTimeout(TIMEOUT_MS) {
                 auth.sendPasswordResetEmail(email.trim().lowercase()).await()
-                AuthResult(
-                    success = true,
-                    message = "Password reset email sent. Please check your inbox."
-                )
+                AuthResult(true, "Password reset email sent. Please check your inbox.")
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            AuthResult(success = false, message = "Request timeout. Please try again.")
+            AuthResult(false, "Request timed out. Please try again.")
         } catch (e: Exception) {
-            Log.e(TAG, "Password reset error", e)
-            AuthResult(success = false, message = e.message ?: "Failed to send reset email")
+            Log.e(TAG, "resetPassword error", e)
+            AuthResult(false, e.message ?: "Failed to send reset email")
         }
     }
 
-    fun signOut() {
-        auth.signOut()
-    }
+    fun signOut() { auth.signOut() }
 
-    private fun isPasswordValid(password: String): Boolean {
-        if (password.length < 6) return false
-        val hasLetter = password.any { it.isLetter() }
-        val hasDigit = password.any { it.isDigit() }
-        return hasLetter && hasDigit
-    }
+    private fun isPasswordValid(p: String): Boolean =
+        p.length >= 6 && p.any { it.isLetter() } && p.any { it.isDigit() }
 
-    fun isEmailValid(email: String): Boolean {
-        return android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()
-    }
+    fun isEmailValid(email: String): Boolean =
+        android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()
 }
