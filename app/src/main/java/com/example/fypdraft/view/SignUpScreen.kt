@@ -19,7 +19,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -27,6 +26,9 @@ import com.example.fypdraft.viewmodel.AuthViewModel
 import kotlinx.coroutines.delay
 
 private val DarkNavy = Color(0xFF1A1A2E)
+private val BodyText  = Color(0xFF1A1A2E)
+private val SubText   = Color(0xFF55556A)
+private val HintText  = Color(0xFF999AAA)
 
 @Composable
 fun SignUpScreen(
@@ -35,127 +37,81 @@ fun SignUpScreen(
     onSignUpSuccess: () -> Unit = {},
     onNavigateToLogin: () -> Unit = {}
 ) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var email           by remember { mutableStateOf("") }
+    var password        by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val uiState           by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState  = remember { SnackbarHostState() }
 
     LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
-        uiState.errorMessage?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
-        }
+        uiState.errorMessage?.let { snackbarHostState.showSnackbar(it); viewModel.clearMessages() }
         uiState.successMessage?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
-            delay(1000)
-            onSignUpSuccess()
+            snackbarHostState.showSnackbar(it); viewModel.clearMessages()
+            delay(1000); onSignUpSuccess()
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.White)
-            .padding(horizontal = 32.dp)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.Start
-        ) {
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor      = DarkNavy,
+        unfocusedBorderColor    = Color(0xFFCCCCDD),
+        focusedContainerColor   = Color.White,
+        unfocusedContainerColor = Color.White,
+        focusedTextColor        = BodyText,
+        unfocusedTextColor      = BodyText,
+        cursorColor             = DarkNavy,
+        focusedLabelColor       = DarkNavy,
+        unfocusedLabelColor     = HintText
+    )
+
+    Box(modifier.fillMaxSize().background(Color.White).padding(horizontal = 32.dp)) {
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.Start) {
             Spacer(Modifier.height(120.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(72.dp)
-                        .clip(CircleShape)
-                        .background(DarkNavy),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("\uD83C\uDFB5", fontSize = 32.sp)
-                }
+                Box(Modifier.size(72.dp).clip(CircleShape).background(DarkNavy),
+                    contentAlignment = Alignment.Center) { Text("\uD83C\uDFB5", fontSize = 32.sp) }
                 Spacer(Modifier.width(16.dp))
-                Text(
-                    text = "MoodSync",
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
+                Text("MoodSync", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = BodyText)
             }
 
             Spacer(Modifier.height(40.dp))
-
-            Text(
-                text = "Welcome! Let\u2019s get\nstarted.",
-                fontSize = 32.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.Black,
-                lineHeight = 40.sp
-            )
-
+            Text("Welcome! Let\u2019s get\nstarted.", fontSize = 32.sp, fontWeight = FontWeight.Bold,
+                color = BodyText, lineHeight = 40.sp)
             Spacer(Modifier.height(48.dp))
 
             OutlinedTextField(
-                value = email,
+                value         = email,
                 onValueChange = { email = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(
-                        "Username or email address",
-                        color = Color.Gray,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(28.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Gray,
-                    unfocusedBorderColor = Color.LightGray,
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White
-                ),
-                enabled = !uiState.isLoading
+                modifier      = Modifier.fillMaxWidth(),
+                label         = { Text("Username or email address") },
+                singleLine    = true,
+                shape         = RoundedCornerShape(28.dp),
+                textStyle     = LocalTextStyle.current.copy(color = BodyText),
+                colors        = fieldColors,
+                enabled       = !uiState.isLoading
             )
 
             Spacer(Modifier.height(20.dp))
 
             OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(
-                        "Password",
-                        color = Color.Gray,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(28.dp),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                value                = password,
+                onValueChange        = { password = it },
+                modifier             = Modifier.fillMaxWidth(),
+                label                = { Text("Password") },
+                singleLine           = true,
+                shape                = RoundedCornerShape(28.dp),
+                textStyle            = LocalTextStyle.current.copy(color = BodyText),
+                keyboardOptions      = KeyboardOptions(keyboardType = KeyboardType.Password),
                 visualTransformation = if (passwordVisible) VisualTransformation.None
                 else PasswordVisualTransformation(),
                 trailingIcon = {
                     IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                        Icon(
-                            imageVector = if (passwordVisible) Icons.Filled.VisibilityOff
-                            else Icons.Filled.Visibility,
-                            contentDescription = null,
-                            tint = Color.Gray
-                        )
+                        Icon(if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            null, tint = SubText)
                     }
                 },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Gray,
-                    unfocusedBorderColor = Color.LightGray,
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White
-                ),
+                colors  = fieldColors,
                 enabled = !uiState.isLoading
             )
 
@@ -166,42 +122,21 @@ fun SignUpScreen(
                     val tempUsername = email.substringBefore("@").ifBlank { email }
                     viewModel.signUp(tempUsername, email, password)
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(28.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = DarkNavy,
-                    contentColor = Color.White
-                ),
-                enabled = !uiState.isLoading
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape    = RoundedCornerShape(28.dp),
+                colors   = ButtonDefaults.buttonColors(containerColor = DarkNavy, contentColor = Color.White),
+                enabled  = !uiState.isLoading
             ) {
-                if (uiState.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = Color.White
-                    )
-                } else {
-                    Text("Continue", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
+                if (uiState.isLoading) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White)
+                else Text("Continue", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
 
             Spacer(Modifier.height(20.dp))
 
-            Text(
-                text = "Already have an account? Login.",
-                fontSize = 14.sp,
-                color = Color.Gray,
+            Text("Already have an account? Login.", fontSize = 14.sp, color = SubText,
                 fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .clickable { onNavigateToLogin() }
-            )
+                modifier = Modifier.align(Alignment.CenterHorizontally).clickable { onNavigateToLogin() })
         }
-
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        SnackbarHost(snackbarHostState, Modifier.align(Alignment.BottomCenter))
     }
 }

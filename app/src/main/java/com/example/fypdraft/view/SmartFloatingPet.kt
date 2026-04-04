@@ -2,8 +2,8 @@ package com.example.fypdraft.view
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -12,27 +12,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.fypdraft.model.*
 import kotlinx.coroutines.delay
-import kotlin.math.cos
-import kotlin.math.sin
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
- * Smart Floating Pet that:
- *   1. Enters from top of screen (Mary Poppins descent)
- *   2. Wanders around screen edges to minimize UI blockage
- *   3. Shows thought bubbles
- *   4. Has spring-physics movement with anticipation
- *   5. Stays within screen bounds
- *   6. Reacts to music state
- *
- * Replaces the static FloatingPetOverlay when the mascot widget
- * is scrolled off screen (or on non-Home screens).
+ * SmartFloatingPet:
+ *  - Drops in from top on first appearance
+ *  - Walks slowly between left/right screen edges (like a Tamagotchi in its enclosure)
+ *  - Flips horizontally to face the direction of travel
+ *  - User can drag it anywhere; wander pauses while dragging
+ *  - Single tap  -> EmotionChat (AI companion)
+ *  - Long press  -> PetShop
+ *  - Shows thought bubbles while idle
  */
 @Composable
 fun SmartFloatingPet(
@@ -40,170 +41,166 @@ fun SmartFloatingPet(
     petRepository: PetRepository,
     isPlaying: Boolean,
     onTap: () -> Unit,
+    onLongPress: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
-    val config = LocalConfiguration.current
-    val screenWidthDp = config.screenWidthDp.toFloat()
-    val screenHeightDp = config.screenHeightDp.toFloat()
+    val config  = LocalConfiguration.current
+    val scope   = rememberCoroutineScope()
 
-    // Pet size
-    val petSize = 60f // dp
+    val screenW = config.screenWidthDp.toFloat()
+    val screenH = config.screenHeightDp.toFloat()
+    val petSizeDp = 64f
 
-    // Safe bounds (keep pet within screen, biased toward edges)
-    val minX = 4f
-    val maxX = screenWidthDp - petSize - 4f
-    val minY = 60f  // Below status bar
-    val maxY = screenHeightDp - petSize - 120f // Above bottom nav
+    val leftEdge  = 4f
+    val rightEdge = screenW - petSizeDp - 4f
+    val topEdge   = 72f
+    val botEdge   = screenH - petSizeDp - 100f
 
-    // ── Position state with spring animation ─────────────────────────
-    val posX = remember { Animatable(maxX) } // Start at right edge
-    val posY = remember { Animatable(-petSize - 20f) } // Start above screen (off-screen top)
+    // Position state
+    val animX = remember { Animatable(rightEdge) }
+    val animY = remember { Animatable(-petSizeDp - 20f) }
 
-    // Entry animation — float down from top
-    var hasEntered by remember { mutableStateOf(false) }
+    // Whether pet is walking right (used to flip sprite)
+    var facingRight by remember { mutableStateOf(false) }
+    var isDragging  by remember { mutableStateOf(false) }
+    var thought     by remember { mutableStateOf("") }
+    var hasEntered  by remember { mutableStateOf(false) }
+
+    // Entry drop
     LaunchedEffect(Unit) {
-        delay(100)
-        // Mary Poppins descent: start from top, gentle spring to initial position
-        posY.animateTo(
-            minY + 40f,
-            spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessVeryLow)
-        )
+        delay(300)
+        animY.animateTo(topEdge + 40f,
+            spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessVeryLow))
         hasEntered = true
     }
 
-    // ── Wander logic ─────────────────────────────────────────────────
-    // The pet wanders along the edges of the screen to minimize blockage
-    var wanderPhase by remember { mutableIntStateOf(0) } // 0=idle, 1=moving, 2=lingering
-    var currentThought by remember { mutableStateOf("") }
-
+    // Auto-wander: walks slowly between edges
     LaunchedEffect(hasEntered) {
         if (!hasEntered) return@LaunchedEffect
-
         while (true) {
-            // Linger at current position for 4-8 seconds
-            wanderPhase = 2
-            val lingerTime = Random.nextLong(4000, 8000)
-
-            // Maybe show a thought
-            if (Random.nextFloat() < 0.3f) {
-                currentThought = when {
-                    isPlaying -> listOf("🎵", "🎶", "🎧", "✨", "💃").random()
-                    else -> listOf("💤", "💭", "🌙", "⭐", "🍕", "❓").random()
+            val lingerMs = Random.nextLong(3_500, 7_000)
+            if (Random.nextFloat() < 0.35f) {
+                thought = when {
+                    isPlaying -> listOf("🎵","🎶","🎧","✨","🕺").random()
+                    else      -> listOf("💤","🌙","⭐","💭","🍕").random()
                 }
-                delay(2500)
-                currentThought = ""
-                delay(lingerTime - 2500)
+                delay(2_500L.coerceAtMost(lingerMs))
+                thought = ""
+                delay((lingerMs - 2_500L).coerceAtLeast(0))
             } else {
-                delay(lingerTime)
+                delay(lingerMs)
             }
 
-            // Pick a new position — biased toward edges
-            wanderPhase = 1
-            val newPos = pickEdgeBiasedPosition(minX, maxX, minY, maxY, petSize)
+            if (isDragging) { delay(400); continue }
 
-            // Move with spring physics
-            posX.animateTo(newPos.first, spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessLow))
-            posY.animateTo(newPos.second, spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessLow))
+            // Always target an edge strip
+            val goRight  = Random.nextBoolean()
+            val targetX  = if (goRight) rightEdge - Random.nextFloat() * 24f
+            else         leftEdge   + Random.nextFloat() * 24f
+            val targetY  = topEdge + Random.nextFloat() * (botEdge - topEdge)
 
-            wanderPhase = 0
+            // Face the direction of travel before moving
+            facingRight = targetX > animX.value
+
+            // Walk speed: ~80-120 dp/sec so it looks like walking, not teleporting
+            val distX    = abs(targetX - animX.value)
+            val distY    = abs(targetY - animY.value)
+            val walkMs   = ((distX + distY) * 12f).toInt().coerceIn(1_800, 6_000)
+
+            scope.launch {
+                animX.animateTo(targetX, tween(walkMs, easing = LinearEasing))
+            }
+            animY.animateTo(targetY, tween(walkMs, easing = EaseInOutSine))
         }
     }
 
-    // ── Alive animations ─────────────────────────────────────────────
-    val inf = rememberInfiniteTransition(label = "floatPet")
-
-    // Gentle floating bob
-    val floatY by inf.animateFloat(
-        0f, if (isPlaying) -6f else -3f,
-        infiniteRepeatable(tween(if (isPlaying) 500 else 2000, easing = EaseInOutSine), RepeatMode.Reverse),
-        label = "floatBob"
+    // Micro-animations
+    val inf = rememberInfiniteTransition(label = "fp")
+    val bobY by inf.animateFloat(
+        0f, if (isPlaying) -7f else -3f,
+        infiniteRepeatable(
+            tween(if (isPlaying) 420 else 1_800, easing = EaseInOutSine),
+            RepeatMode.Reverse),
+        label = "bob"
     )
-
-    // Slight rotation sway
     val sway by inf.animateFloat(
-        -5f, 5f,
-        infiniteRepeatable(tween(if (isPlaying) 400 else 3000, easing = EaseInOutSine), RepeatMode.Reverse),
-        label = "floatSway"
+        -4f, 4f,
+        infiniteRepeatable(
+            tween(if (isPlaying) 340 else 2_000, easing = EaseInOutSine),
+            RepeatMode.Reverse),
+        label = "sway"
     )
 
-    // Scale pulse when moving
-    val movePulse by animateFloatAsState(
-        if (wanderPhase == 1) 1.1f else 1f,
-        spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "movePulse"
-    )
-
-    // ── Render ───────────────────────────────────────────────────────
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-    ) {
+    Box(modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
-                .offset(x = posX.value.dp, y = posY.value.dp)
-                .graphicsLayer {
-                    translationY = floatY
-                    rotationZ = sway
-                    scaleX = movePulse
-                    scaleY = movePulse
+                .offset {
+                    IntOffset(
+                        with(density) { animX.value.dp.roundToPx() },
+                        with(density) { (animY.value + bobY).dp.roundToPx() }
+                    )
                 }
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { onTap() }
+                // Drag — user repositions the pet
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart  = { isDragging = true },
+                        onDragEnd    = { isDragging = false },
+                        onDragCancel = { isDragging = false },
+                        onDrag       = { change, dragAmount ->
+                            change.consume()
+                            scope.launch {
+                                val nx = (animX.value + dragAmount.x / density.density)
+                                    .coerceIn(0f, screenW - petSizeDp)
+                                val ny = (animY.value + dragAmount.y / density.density)
+                                    .coerceIn(0f, screenH - petSizeDp)
+                                animX.snapTo(nx)
+                                animY.snapTo(ny)
+                            }
+                        }
+                    )
+                }
+                // Tap / long-press
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap       = { onTap() },
+                        onLongPress = { onLongPress() }
+                    )
+                }
         ) {
-            // Thought bubble above pet
-            if (currentThought.isNotEmpty()) {
+            // Thought bubble
+            if (thought.isNotEmpty()) {
                 Box(
-                    modifier = Modifier
+                    Modifier
                         .align(Alignment.TopCenter)
-                        .offset(y = (-18).dp)
-                        .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                ) {
-                    Text(currentThought, fontSize = 14.sp)
-                }
+                        .offset(y = (-22).dp)
+                        .background(Color.White.copy(alpha = 0.88f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) { Text(thought, fontSize = 15.sp) }
             }
 
-            // Pet
-            LottiePetView(
-                petState = petState,
-                animation = when {
-                    isPlaying -> PetAnimation.DANCING
-                    wanderPhase == 1 -> PetAnimation.HAPPY_BOUNCE
-                    else -> PetAnimation.IDLE
-                },
-                isPlaying = isPlaying,
-                modifier = Modifier.size(petSize.dp)
-            )
-        }
-    }
-}
-
-/**
- * Pick a position biased toward screen edges to minimize UI blockage.
- * 70% chance of edge position, 30% chance of anywhere (but still near edge).
- */
-private fun pickEdgeBiasedPosition(
-    minX: Float, maxX: Float, minY: Float, maxY: Float, petSize: Float
-): Pair<Float, Float> {
-    val edge = Random.nextInt(4)
-    return when {
-        Random.nextFloat() < 0.7f -> {
-            // Stick to an edge
-            when (edge) {
-                0 -> minX to Random.nextFloat() * (maxY - minY) + minY           // Left
-                1 -> maxX to Random.nextFloat() * (maxY - minY) + minY           // Right
-                2 -> Random.nextFloat() * (maxX - minX) + minX to minY           // Top
-                else -> Random.nextFloat() * (maxX - minX) + minX to maxY        // Bottom
+            // Pet — flip X to face direction of travel
+            Box(
+                Modifier
+                    .size(petSizeDp.dp)
+                    .graphicsLayer(
+                        scaleX    = if (facingRight) 1f else -1f,
+                        scaleY    = 1f,
+                        rotationZ = if (isDragging) sway * 2f else sway * 0.5f
+                    )
+            ) {
+                LottiePetView(
+                    petState  = petState,
+                    animation = when {
+                        isDragging         -> PetAnimation.HAPPY_BOUNCE
+                        isPlaying          -> PetAnimation.DANCING
+                        animX.isRunning    -> PetAnimation.HAPPY_BOUNCE  // walking
+                        else               -> PetAnimation.IDLE
+                    },
+                    isPlaying = isPlaying,
+                    modifier  = Modifier.fillMaxSize()
+                )
             }
-        }
-        else -> {
-            // Near-edge but not exactly on it
-            val margin = (maxX - minX) * 0.2f
-            val x = if (Random.nextBoolean()) minX + Random.nextFloat() * margin else maxX - Random.nextFloat() * margin
-            val y = Random.nextFloat() * (maxY - minY) + minY
-            x to y
         }
     }
 }

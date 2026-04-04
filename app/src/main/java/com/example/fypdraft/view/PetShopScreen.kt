@@ -1,18 +1,18 @@
 package com.example.fypdraft.view
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -22,12 +22,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.fypdraft.model.*
+import kotlinx.coroutines.launch
+
+// ── Warm sandy palette matching the screenshots ───────────────────────────
+private val BgSand      = Color(0xFFF5EDD8)
+private val CardSand    = Color(0xFFE8D9BC)
+private val CardDeep    = Color(0xFFCFBB9A)
+private val AccentOrange = Color(0xFFFF8C42)
+private val AccentStar  = Color(0xFFFFD700)
+private val TextDark    = Color(0xFF3A2A1A)
+private val TextMid     = Color(0xFF7A6050)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,316 +47,350 @@ fun PetShopScreen(
     onBack: () -> Unit = {},
     onNavigateToMusicPlayer: () -> Unit = {}
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("🛒 Shop", "🎒 Inventory", "📋 Missions", "🍪 Snacks")
-    var showFeedDialog by remember { mutableStateOf(false) }
-    var feedResult by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    var selectedTab by remember { mutableIntStateOf(0) }      // 0=MoodEqualiser 1=Dressing
+    var snackbarText by remember { mutableStateOf<String?>(null) }
+
+    // Animate pet entrance
+    val petScale by animateFloatAsState(
+        targetValue = 1f, animationSpec = spring(Spring.DampingRatioMediumBouncy),
+        label = "petScale"
+    )
 
     Scaffold(
+        containerColor = BgSand,
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Pet Shop", fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(8.dp))
-                        // Bonding points display
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = Color(0xFFFFD700).copy(alpha = 0.2f)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("💎", fontSize = 14.sp)
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "${petState.bondingPoints}",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFFFB300)
-                                )
-                            }
-                        }
-                    }
-                },
+            CenterAlignedTopAppBar(
+                title = { Text(petState.name, fontWeight = FontWeight.Bold, color = TextDark) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, "Back")
+                        Icon(Icons.Filled.ArrowBack, null, tint = TextDark)
                     }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = BgSand),
+                actions = {
+                    // Star currency display
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(CardSand)
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("⭐", fontSize = 14.sp)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "${petState.bondingPoints}",
+                            fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
                 }
             )
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            // Tab row
-            ScrollableTabRow(selectedTabIndex = selectedTab) {
-                tabs.forEachIndexed { i, title ->
-                    Tab(selected = selectedTab == i, onClick = { selectedTab = i }) {
-                        Text(title, modifier = Modifier.padding(vertical = 14.dp, horizontal = 8.dp), fontSize = 13.sp)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(BgSand)
+                .padding(padding)
+        ) {
+            // ── Pet display + level bar ───────────────────────────────
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(220.dp)
+                    .background(
+                        Brush.verticalGradient(listOf(Color(0xFFFAEDCC), BgSand))
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Pet sprite
+                    Box(
+                        Modifier
+                            .size(120.dp)
+                            .graphicsLayer(scaleX = petScale, scaleY = petScale)
+                    ) {
+                        PixelPet(
+                            petState  = petState,
+                            animation = PetAnimation.HAPPY_BOUNCE,
+                            modifier  = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // Level pill + XP bar
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(AccentOrange)
+                                .padding(horizontal = 10.dp, vertical = 3.dp)
+                        ) {
+                            Text("Lv ${petState.level}", color = Color.White,
+                                fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Box(
+                            Modifier
+                                .width(160.dp)
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(CardDeep)
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(petState.xpProgress)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(AccentOrange)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text("${petState.xp}/${petState.xpForNextLevel}",
+                            fontSize = 11.sp, color = TextMid)
                     }
                 }
             }
 
+            // ── Tab row ───────────────────────────────────────────────
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(CardSand)
+            ) {
+                listOf("🎮 Mood Lab", "👕 Dressing").forEachIndexed { i, label ->
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (selectedTab == i) CardDeep else Color.Transparent)
+                            .clickable { selectedTab = i }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(label, fontWeight = FontWeight.SemiBold,
+                            color = if (selectedTab == i) TextDark else TextMid,
+                            fontSize = 14.sp)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // ── Tab content ───────────────────────────────────────────
             when (selectedTab) {
-                0 -> ShopTab(petState, petRepository)
-                1 -> InventoryTab(petState, petRepository)
-                2 -> MissionsTab(petState, petRepository)
-                3 -> SnacksTab(petState, petRepository)
+                0 -> MoodLabTab(petState, petRepository, onNavigateToMusicPlayer)
+                1 -> DressingTab(petState, petRepository,
+                    onBuy = { acc ->
+                        val ok = petRepository.buyAccessory(acc)
+                        snackbarText = if (ok) "Bought ${acc.name}! ✨" else "Not enough ⭐"
+                    },
+                    onEquip = { acc ->
+                        petRepository.equipAccessory(acc)
+                        snackbarText = "Equipped ${acc.name}!"
+                    }
+                )
             }
         }
     }
 
-    // Feed result snackbar
-    feedResult?.let { msg ->
+    // Snackbar overlay
+    snackbarText?.let { msg ->
         LaunchedEffect(msg) {
-            kotlinx.coroutines.delay(2000)
-            feedResult = null
+            kotlinx.coroutines.delay(2_000)
+            snackbarText = null
+        }
+        Box(
+            Modifier.fillMaxSize().padding(bottom = 32.dp),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF1A1A2E))
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
+            ) {
+                Text(msg, color = Color.White, fontSize = 14.sp)
+            }
         }
     }
 }
 
-// ── Shop Tab ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
+// Tab 1 — Mood Lab (Image 1 reference: pet status + activity grid)
+// ─────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ShopTab(petState: PetState, repo: PetRepository) {
-    val scrollState = rememberScrollState()
-    Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp)) {
-        // Bonding tier info
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF6A5ACD).copy(alpha = 0.1f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("🏆", fontSize = 28.sp)
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("Tier: ${petState.bondingTier.tierName}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text(petState.bondingTier.description, fontSize = 12.sp, color = Color.Gray)
-                    Text("Level ${petState.level} · ${petState.bondingPoints} 💎", fontSize = 12.sp, color = Color(0xFFFFB300))
+private fun MoodLabTab(
+    petState: PetState,
+    petRepository: PetRepository,
+    onNavigateToMusicPlayer: () -> Unit
+) {
+    val inf  = rememberInfiniteTransition(label = "ml")
+    val glow by inf.animateFloat(
+        0.6f, 1f,
+        infiniteRepeatable(tween(1_200, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "glow"
+    )
+
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // ── Needs status (energy / happiness / cleanliness) ───────────
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = CardSand),
+                elevation = CardDefaults.cardElevation(0.dp)
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Status", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
+                    Spacer(Modifier.height(10.dp))
+                    NeedBar("⚡ Energy",     petState.energy,       Color(0xFFFFB347))
+                    Spacer(Modifier.height(6.dp))
+                    NeedBar("💖 Happiness",  petState.happiness / 100f, Color(0xFFFF80AB))
+                    Spacer(Modifier.height(6.dp))
+                    NeedBar("✨ Cleanliness", petState.cleanliness,  Color(0xFF7BE8D8))
                 }
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        // ── Genre craving ─────────────────────────────────────────────
+        if (petState.currentCraving != null && !petState.cravingSatisfied) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                    elevation = CardDefaults.cardElevation(0.dp),
+                    modifier = Modifier.graphicsLayer(alpha = glow)
+                ) {
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("🤤", fontSize = 28.sp)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("Craving ${petState.currentCraving}!",
+                                fontWeight = FontWeight.Bold, color = TextDark)
+                            Text("Play some ${petState.currentCraving?.lowercase()} to satisfy it",
+                                fontSize = 12.sp, color = TextMid)
+                        }
+                    }
+                }
+            }
+        }
 
-        // Accessories shop by category
-        AccessoryCategory.values().forEach { category ->
-            Text(
-                "${getCategoryEmoji(category)} ${category.name.lowercase().replaceFirstChar { it.uppercase() }}",
-                fontWeight = FontWeight.Bold, fontSize = 16.sp
-            )
-            Spacer(Modifier.height(8.dp))
+        // ── Activity grid (Image 1/2 reference) ───────────────────────
+        item {
+            Text("Activities", fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                color = TextDark, modifier = Modifier.padding(top = 4.dp))
+        }
 
-            val items = ALL_ACCESSORIES.filter { it.category == category }
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(items) { acc ->
-                    ShopItemCard(
-                        accessory = acc,
-                        petState = petState,
-                        onBuy = { repo.buyAccessory(acc) }
+        // Big centre button — "Earn Stars" (领火星 equivalent)
+        item {
+            Box(
+                Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier
+                        .size(110.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(CardSand)
+                        .clickable { onNavigateToMusicPlayer() }
+                        .graphicsLayer(scaleX = glow * 0.05f + 0.95f, scaleY = glow * 0.05f + 0.95f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("⭐", fontSize = 36.sp)
+                        Text("Earn Stars", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = TextDark)
+                        Text("⭐ ${petState.bondingPoints}", fontSize = 11.sp, color = TextMid)
+                    }
+                }
+            }
+        }
+
+        // 2-column grid of activities
+        val activities = listOf(
+            ActivityItem("🎴", "Sprite Cards", "Collect pet forms"),
+            ActivityItem("📖", "Bestiary",     "View collection"),
+            ActivityItem("🛠️", "Work",         "Earn stars"),
+            ActivityItem("🎮", "Play",         "Mini games"),
+            ActivityItem("🤖", "AI Chat",      "Talk to your pet"),
+            ActivityItem("😊", "Emote Pack",   "Custom emotes"),
+            ActivityItem("🏆", "Rankings",     "Star leaderboard"),
+            ActivityItem("🛁", "Groom",        "Clean your pet"),
+        )
+        item {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                userScrollEnabled = false,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement   = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.height(340.dp)
+            ) {
+                items(activities) { act ->
+                    ActivityCard(act, onClick = {
+                        if (act.label == "Groom") petRepository.groom()
+                    })
+                }
+            }
+        }
+
+        // ── Daily missions ─────────────────────────────────────────────
+        item {
+            Text("Daily Missions", fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                color = TextDark, modifier = Modifier.padding(top = 4.dp))
+        }
+        item {
+            val missions = getDailyMissions(System.currentTimeMillis())
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                missions.forEach { mission ->
+                    val done = mission.id in petState.completedMissions
+                    val met  = mission.checkComplete(petState)
+                    MissionRow(
+                        mission   = mission,
+                        isDone    = done,
+                        isMet     = met,
+                        onClaim   = { petRepository.checkAndClaimMission(mission) }
                     )
                 }
             }
-            Spacer(Modifier.height(16.dp))
         }
-
-        Spacer(Modifier.height(16.dp))
-        Text("🍪 Snack Shop", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        Spacer(Modifier.height(8.dp))
-
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(ALL_SNACKS) { snack ->
-                SnackShopCard(
-                    snack = snack,
-                    petState = petState,
-                    onBuy = { repo.buySnack(snack) }
-                )
-            }
-        }
+        item { Spacer(Modifier.height(80.dp)) }
     }
 }
 
-@Composable
-private fun ShopItemCard(accessory: PetAccessory, petState: PetState, onBuy: () -> Unit) {
-    val owned = petState.ownsAccessory(accessory.id)
-    val canAfford = petState.canAfford(accessory)
-    val levelOk = accessory.requiredLevel <= petState.level
+private data class ActivityItem(val emoji: String, val label: String, val sub: String)
 
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = when {
-            owned -> Color(0xFF4CAF50).copy(alpha = 0.1f)
-            !levelOk -> Color(0xFFE0E0E0)
-            else -> MaterialTheme.colorScheme.surface
-        },
-        tonalElevation = 2.dp,
-        modifier = Modifier.width(120.dp)
+@Composable
+private fun ActivityCard(act: ActivityItem, onClick: () -> Unit) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSand),
+        elevation = CardDefaults.cardElevation(0.dp),
+        modifier = Modifier.clickable { onClick() }
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(12.dp)
+        Row(
+            Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(accessory.emoji, fontSize = 32.sp)
-            Spacer(Modifier.height(4.dp))
-            Text(accessory.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(accessory.description, fontSize = 9.sp, color = Color.Gray,
-                textAlign = TextAlign.Center, maxLines = 1)
-            Spacer(Modifier.height(6.dp))
-
-            when {
-                owned -> Text("✓ Owned", fontSize = 10.sp, color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
-                !levelOk -> Text("🔒 Lv.${accessory.requiredLevel}", fontSize = 10.sp, color = Color.Gray)
-                accessory.price == 0 -> Text("Free!", fontSize = 10.sp, color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
-                else -> {
-                    Button(
-                        onClick = onBuy,
-                        enabled = canAfford,
-                        modifier = Modifier.height(28.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFB300))
-                    ) {
-                        Text("${accessory.price} 💎", fontSize = 10.sp, color = Color.White)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SnackShopCard(snack: PetSnack, petState: PetState, onBuy: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp,
-        modifier = Modifier.width(110.dp)
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(10.dp)
-        ) {
-            Text(snack.emoji, fontSize = 28.sp)
-            Text(snack.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-            Text("+${snack.energyBoost}⚡ +${snack.happinessBoost}💖", fontSize = 8.sp, color = Color.Gray)
-            Spacer(Modifier.height(4.dp))
-            Button(
-                onClick = onBuy,
-                enabled = petState.canAffordSnack(snack),
-                modifier = Modifier.height(26.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFB300))
-            ) {
-                Text("${snack.price} 💎", fontSize = 10.sp, color = Color.White)
-            }
-            val owned = petState.snackCount(snack.id)
-            if (owned > 0) Text("×$owned in bag", fontSize = 8.sp, color = Color(0xFF4CAF50))
-        }
-    }
-}
-
-// ── Inventory Tab ────────────────────────────────────────────────────────
-
-@Composable
-private fun InventoryTab(petState: PetState, repo: PetRepository) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        // Pet preview with current equipment
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFF3E5F5)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(16.dp)
-            ) {
-                PixelPet(
-                    petState = petState,
-                    animation = PetAnimation.IDLE,
-                    modifier = Modifier.size(100.dp)
-                )
-                Spacer(Modifier.height(8.dp))
-                Text("${petState.name} · Lv.${petState.level}", fontWeight = FontWeight.Bold)
-
-                // Needs bars
-                Spacer(Modifier.height(8.dp))
-                NeedBar("⚡ Energy", petState.energy, Color(0xFFFFB300))
-                NeedBar("✨ Clean", petState.cleanliness, Color(0xFF42A5F5))
-                NeedBar("💖 Happy", petState.happiness / 100f, Color(0xFFE91E63))
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Equipped items
-        Text("Equipped", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        Spacer(Modifier.height(8.dp))
-
-        AccessoryCategory.values().forEach { cat ->
-            val equippedId = when (cat) {
-                AccessoryCategory.HAT -> petState.equippedHat
-                AccessoryCategory.GLASSES -> petState.equippedGlasses
-                AccessoryCategory.NECKLACE -> petState.equippedNecklace
-                AccessoryCategory.OUTFIT -> petState.equippedOutfit
-            }
-            val equipped = equippedId?.let { id -> ALL_ACCESSORIES.find { it.id == id } }
-
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("${getCategoryEmoji(cat)} ${cat.name.lowercase().replaceFirstChar { it.uppercase() }}:",
-                    fontSize = 13.sp, modifier = Modifier.width(90.dp))
-                if (equipped != null) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF6A5ACD).copy(alpha = 0.1f),
-                        modifier = Modifier.clickable { repo.unequipCategory(cat) }
-                    ) {
-                        Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                            Text("${equipped.emoji} ${equipped.name}", fontSize = 12.sp)
-                            Spacer(Modifier.width(4.dp))
-                            Text("✕", fontSize = 10.sp, color = Color.Red)
-                        }
-                    }
-                } else {
-                    Text("Empty", fontSize = 12.sp, color = Color.Gray)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Owned items grid
-        Text("Your Items (${petState.ownedAccessories.size})", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        Spacer(Modifier.height(8.dp))
-
-        val ownedItems = ALL_ACCESSORIES.filter { petState.ownsAccessory(it.id) }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(ownedItems) { acc ->
-                val isEquipped = when (acc.category) {
-                    AccessoryCategory.HAT -> petState.equippedHat == acc.id
-                    AccessoryCategory.GLASSES -> petState.equippedGlasses == acc.id
-                    AccessoryCategory.NECKLACE -> petState.equippedNecklace == acc.id
-                    AccessoryCategory.OUTFIT -> petState.equippedOutfit == acc.id
-                }
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isEquipped) Color(0xFF6A5ACD).copy(alpha = 0.15f) else Color(0xFFF5F5F5),
-                    modifier = Modifier.clickable {
-                        if (isEquipped) repo.unequipCategory(acc.category)
-                        else repo.equipAccessory(acc)
-                    }
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(10.dp).width(60.dp)
-                    ) {
-                        Text(acc.emoji, fontSize = 24.sp)
-                        Text(acc.name, fontSize = 9.sp, textAlign = TextAlign.Center, maxLines = 1)
-                        if (isEquipped) Text("Worn", fontSize = 8.sp, color = Color(0xFF6A5ACD))
-                    }
-                }
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(CardDeep),
+                contentAlignment = Alignment.Center
+            ) { Text(act.emoji, fontSize = 20.sp) }
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(act.label, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = TextDark)
+                Text(act.sub,   fontSize = 10.sp, color = TextMid)
             }
         }
     }
@@ -354,204 +398,217 @@ private fun InventoryTab(petState: PetState, repo: PetRepository) {
 
 @Composable
 private fun NeedBar(label: String, value: Float, color: Color) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, fontSize = 11.sp, modifier = Modifier.width(80.dp))
+    Column {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, fontSize = 12.sp, color = TextMid)
+            Text("${(value * 100).toInt()}%", fontSize = 12.sp, color = TextMid)
+        }
+        Spacer(Modifier.height(3.dp))
         Box(
-            Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(Color.LightGray.copy(alpha = 0.3f))
+            Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(4.dp)).background(CardDeep)
         ) {
             Box(
-                Modifier.fillMaxHeight().fillMaxWidth(value.coerceIn(0f, 1f)).clip(RoundedCornerShape(4.dp)).background(color)
+                Modifier.fillMaxWidth(value.coerceIn(0f, 1f)).fillMaxHeight()
+                    .clip(RoundedCornerShape(4.dp)).background(color)
             )
         }
-        Spacer(Modifier.width(8.dp))
-        Text("${(value * 100).toInt()}%", fontSize = 10.sp, color = Color.Gray)
     }
 }
 
-// ── Missions Tab ─────────────────────────────────────────────────────────
-
 @Composable
-private fun MissionsTab(petState: PetState, repo: PetRepository) {
-    val missions = getDailyMissions(petState.lastDailyReset)
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Daily Missions", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("Complete missions to earn 💎 Bonding Points!", fontSize = 12.sp, color = Color.Gray)
-        Spacer(Modifier.height(12.dp))
-
-        missions.forEach { mission ->
-            val completed = mission.id in petState.completedMissions
-            val canClaim = !completed && mission.checkComplete(petState)
-
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = when {
-                        completed -> Color(0xFF4CAF50).copy(alpha = 0.1f)
-                        canClaim -> Color(0xFFFFB300).copy(alpha = 0.15f)
-                        else -> MaterialTheme.colorScheme.surface
-                    }
-                ),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(mission.emoji, fontSize = 28.sp)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(mission.title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                        Text(mission.description, fontSize = 11.sp, color = Color.Gray)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    when {
-                        completed -> Text("✓", fontSize = 20.sp, color = Color(0xFF4CAF50))
-                        canClaim -> Button(
-                            onClick = { repo.checkAndClaimMission(mission) },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFB300)),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                        ) { Text("+${mission.reward} 💎", fontSize = 11.sp) }
-                        else -> Text("${mission.reward} 💎", fontSize = 11.sp, color = Color.Gray)
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        // Genre craving
-        if (petState.currentCraving != null) {
-            val craving = GENRE_CRAVINGS.find { it.genre == petState.currentCraving }
-            if (craving != null) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (petState.cravingSatisfied)
-                            Color(0xFF4CAF50).copy(alpha = 0.1f)
-                        else Color(0xFFE1BEE7).copy(alpha = 0.3f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(craving.emoji, fontSize = 32.sp)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Genre Craving!", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text(craving.message, fontSize = 12.sp, color = Color.Gray)
-                        }
-                        if (petState.cravingSatisfied) {
-                            Text("✓ +${craving.reward}💎", fontSize = 12.sp, color = Color(0xFF4CAF50))
-                        } else {
-                            Text("+${craving.reward} 💎", fontSize = 12.sp, color = Color(0xFFFFB300))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ── Snacks Tab ───────────────────────────────────────────────────────────
-
-@Composable
-private fun SnacksTab(petState: PetState, repo: PetRepository) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Your Snack Bag", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("Drag snacks onto your pet to feed them!", fontSize = 12.sp, color = Color.Gray)
-        Spacer(Modifier.height(12.dp))
-
-        // Needs display
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
-            modifier = Modifier.fillMaxWidth()
+private fun MissionRow(
+    mission: DailyMission,
+    isDone: Boolean,
+    isMet: Boolean,
+    onClaim: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = if (isDone) CardDeep else CardSand),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(Modifier.padding(12.dp)) {
-                NeedBar("⚡ Energy", petState.energy, Color(0xFFFFB300))
-                NeedBar("✨ Clean", petState.cleanliness, Color(0xFF42A5F5))
-                NeedBar("💖 Happy", petState.happiness / 100f, Color(0xFFE91E63))
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { repo.groom() },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF42A5F5))
-                ) {
-                    Text("✨ Groom Pet (+5💎)")
-                }
+            Text(mission.emoji, fontSize = 22.sp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(mission.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = TextDark)
+                Text(mission.description, fontSize = 11.sp, color = TextMid)
             }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Owned snacks
-        val ownedSnacks = ALL_SNACKS.filter { petState.snackCount(it.id) > 0 }
-        if (ownedSnacks.isEmpty()) {
-            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("🍪", fontSize = 40.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text("No snacks yet!", color = Color.Gray)
-                    Text("Buy some from the Shop tab", fontSize = 12.sp, color = Color.Gray)
-                }
-            }
-        } else {
-            ownedSnacks.forEach { snack ->
-                val count = petState.snackCount(snack.id)
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Row(
-                        Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(snack.emoji, fontSize = 32.sp)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(snack.name, fontWeight = FontWeight.SemiBold)
-                            Text(snack.effect, fontSize = 11.sp, color = Color.Gray)
-                            Text("+${snack.energyBoost}⚡ +${snack.happinessBoost}💖", fontSize = 10.sp, color = Color(0xFFFFB300))
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Text("×$count", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = { repo.feedSnack(snack) },
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
-                        ) {
-                            Text("Feed 🍴", fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Active effect display
-        if (petState.hasActiveEffect) {
-            Spacer(Modifier.height(12.dp))
-            val effectSnack = ALL_SNACKS.find { it.id == petState.activeEffect }
-            if (effectSnack != null) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("✨", fontSize = 20.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text("Active: ${effectSnack.name}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(effectSnack.effect, fontSize = 11.sp, color = Color.Gray)
-                        }
-                    }
-                }
+            when {
+                isDone -> Text("✅", fontSize = 18.sp)
+                isMet  -> Button(
+                    onClick  = onClaim,
+                    colors   = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                    shape    = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) { Text("+${mission.reward}⭐", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                else   -> Text("⭐${mission.reward}", fontSize = 12.sp, color = TextMid)
             }
         }
     }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
+// Tab 2 — Dressing (Image 2 reference: category grid → items scroll)
+// ─────────────────────────────────────────────────────────────────────────
 
-private fun getCategoryEmoji(cat: AccessoryCategory) = when (cat) {
-    AccessoryCategory.HAT -> "🎩"
-    AccessoryCategory.GLASSES -> "👓"
-    AccessoryCategory.NECKLACE -> "📿"
-    AccessoryCategory.OUTFIT -> "👔"
+@Composable
+private fun DressingTab(
+    petState: PetState,
+    petRepository: PetRepository,
+    onBuy: (PetAccessory) -> Unit,
+    onEquip: (PetAccessory) -> Unit
+) {
+    // Category filter
+    var selectedCategory by remember { mutableStateOf<AccessoryCategory?>(null) }
+
+    val allUnlocked = petState.unlockedAccessories()
+    val filtered    = if (selectedCategory == null) allUnlocked
+    else allUnlocked.filter { it.category == selectedCategory }
+
+    Column(Modifier.fillMaxSize()) {
+        // ── Category chips ────────────────────────────────────────────
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            item {
+                CategoryChip("All", null, selectedCategory == null) {
+                    selectedCategory = null
+                }
+            }
+            items(AccessoryCategory.entries) { cat ->
+                val emoji = when (cat) {
+                    AccessoryCategory.HAT      -> "🧢"
+                    AccessoryCategory.GLASSES  -> "👓"
+                    AccessoryCategory.NECKLACE -> "📿"
+                    AccessoryCategory.OUTFIT   -> "👕"
+                }
+                CategoryChip("$emoji ${cat.name.lowercase().replaceFirstChar { it.uppercase() }}",
+                    cat, selectedCategory == cat) { selectedCategory = cat }
+            }
+        }
+
+        // ── Item grid (Image 2 style: 2-column cards) ─────────────────
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement   = Arrangement.spacedBy(10.dp)
+        ) {
+            items(filtered, key = { it.id }) { acc ->
+                val owned    = petState.ownsAccessory(acc.id)
+                val equipped = petState.equippedHat == acc.id ||
+                        petState.equippedGlasses == acc.id ||
+                        petState.equippedNecklace == acc.id ||
+                        petState.equippedOutfit == acc.id
+                val canAfford = petState.canAfford(acc)
+
+                DressingCard(
+                    acc      = acc,
+                    owned    = owned,
+                    equipped = equipped,
+                    canAfford = canAfford,
+                    onAction = {
+                        if (owned) onEquip(acc) else onBuy(acc)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryChip(
+    label: String, cat: AccessoryCategory?, selected: Boolean, onClick: () -> Unit
+) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) CardDeep else CardSand)
+            .border(
+                width = if (selected) 1.5.dp else 0.dp,
+                color = if (selected) AccentOrange else Color.Transparent,
+                shape = RoundedCornerShape(14.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) TextDark else TextMid)
+    }
+}
+
+@Composable
+private fun DressingCard(
+    acc: PetAccessory,
+    owned: Boolean,
+    equipped: Boolean,
+    canAfford: Boolean,
+    onAction: () -> Unit
+) {
+    Card(
+        shape  = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                equipped -> Color(0xFFFFF3E0)
+                owned    -> CardSand
+                else     -> CardSand.copy(alpha = 0.7f)
+            }
+        ),
+        elevation = CardDefaults.cardElevation(0.dp),
+        modifier  = Modifier
+            .then(if (equipped) Modifier.border(2.dp, AccentOrange, RoundedCornerShape(18.dp)) else Modifier)
+    ) {
+        Column(
+            Modifier.padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Emoji icon in a circle
+            Box(
+                Modifier.size(64.dp).clip(CircleShape).background(CardDeep),
+                contentAlignment = Alignment.Center
+            ) { Text(acc.emoji, fontSize = 30.sp) }
+
+            Spacer(Modifier.height(8.dp))
+            Text(acc.name, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextDark,
+                textAlign = TextAlign.Center)
+            Text(acc.description, fontSize = 10.sp, color = TextMid,
+                textAlign = TextAlign.Center, maxLines = 2)
+
+            Spacer(Modifier.height(8.dp))
+
+            when {
+                equipped -> Box(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(AccentOrange).padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("Equipped ✓", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+
+                owned -> Box(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(CardDeep).clickable { onAction() }.padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("Equip", color = TextDark, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+
+                else -> Box(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(if (canAfford) AccentStar else Color.LightGray)
+                        .clickable(enabled = canAfford) { onAction() }.padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        if (acc.price == 0) "Free (Lv ${acc.requiredLevel})"
+                        else "⭐ ${acc.price}",
+                        color = if (canAfford) Color(0xFF3A2A1A) else Color.Gray,
+                        fontWeight = FontWeight.Bold, fontSize = 12.sp
+                    )
+                }
+            }
+        }
+    }
 }

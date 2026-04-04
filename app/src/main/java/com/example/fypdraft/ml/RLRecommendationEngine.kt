@@ -4,35 +4,19 @@ import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
-import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.sqrt
 
-/**
- * Reinforcement Learning Recommendation Engine
- *
- * Uses a contextual bandit approach:
- * - Context: user mood, time of day, recent listening patterns
- * - Actions: Spotify audio feature targets (valence, energy, danceability, tempo)
- * - Reward: composite score from 7 user signals
- *
- * State is stored in Firebase Firestore for cross-device sync.
- *
- * The model maintains a weight matrix that maps mood contexts to optimal
- * audio feature ranges, updated via gradient-free policy updates (exponential
- * weighted averaging) after each user interaction.
- */
-
-// ── Reward signals ───────────────────────────────────────────────────
-
 enum class RewardType(val weight: Float) {
-    PLAYED(0.3f),              // User played a song
-    SKIPPED(-0.5f),            // User skipped quickly
-    FAVORITED(1.0f),           // Added to favorites (strongest positive)
-    SUGGESTION_ACCEPTED(0.6f), // Accepted mascot suggestion
-    SUGGESTION_REJECTED(-0.3f),// Rejected mascot suggestion
-    MOOD_OVERRIDE(-0.2f),      // Changed mood manually (current recs were wrong)
-    LISTEN_DURATION(0.0f)      // Scaled by actual duration ratio (set dynamically)
+    PLAYED(0.3f),
+    SKIPPED(-0.5f),
+    COMPLETED(0.8f),               // ← NEW: listened to >80% of track
+    REPLAYED(1.2f),                // ← NEW: played again immediately
+    FAVORITED(1.0f),
+    SUGGESTION_ACCEPTED(0.6f),
+    SUGGESTION_REJECTED(-0.3f),
+    MOOD_OVERRIDE(-0.2f),
+    LISTEN_DURATION(0.0f)
 }
 
 data class RewardEvent(
@@ -40,24 +24,19 @@ data class RewardEvent(
     val mood: String,
     val trackFeatures: AudioFeatures?,
     val timestamp: Long = System.currentTimeMillis(),
-    val durationRatio: Float = 0f  // 0-1, how much of the song was listened to
+    val durationRatio: Float = 0f,
+    val queryUsed: String = ""     // ← NEW: which search query produced this track
 )
 
-/**
- * Spotify audio features for a track (from Spotify API or estimated)
- */
 data class AudioFeatures(
-    val valence: Float = 0.5f,       // 0=sad, 1=happy
-    val energy: Float = 0.5f,        // 0=calm, 1=energetic
-    val danceability: Float = 0.5f,  // 0=not danceable, 1=very danceable
-    val tempo: Float = 120f,         // BPM
-    val acousticness: Float = 0.5f,  // 0=electronic, 1=acoustic
-    val instrumentalness: Float = 0.3f // 0=vocal, 1=instrumental
+    val valence: Float = 0.5f,
+    val energy: Float = 0.5f,
+    val danceability: Float = 0.5f,
+    val tempo: Float = 120f,
+    val acousticness: Float = 0.5f,
+    val instrumentalness: Float = 0.3f
 )
 
-/**
- * Target audio features for Spotify recommendations API
- */
 data class FeatureTargets(
     val targetValence: Float,
     val targetEnergy: Float,
@@ -75,14 +54,22 @@ class RLRecommendationEngine {
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
 
-    // ── Model state: mood → feature preferences ──────────────────────
-    // Each mood has learned optimal audio feature centers + exploration radius
-
     private val moodFeatureMap = mutableMapOf<String, MoodFeatureState>()
     private var totalInteractions = 0
     private var isLoaded = false
 
-    // Default feature targets per mood (prior knowledge)
+    // ── NEW: Query weight table ───────────────────────────────────────
+    // Maps "mood:query_keyword" → score (positive = good, negative = bad)
+    // e.g. "happy:sunshine" → 0.8 means sunshine queries work well for happy mood
+    private val queryWeights = mutableMapOf<String, Float>()
+
+    // Session tracking for implicit feedback
+    private var sessionStartMs = 0L
+    private var currentTrackStartMs = 0L
+    private var currentTrackDurationMs = 0L
+    private var currentTrackQuery = ""
+    private var currentMood = ""
+
     private val DEFAULT_FEATURES = mapOf(
         "happy"     to AudioFeatures(valence = 0.8f, energy = 0.7f, danceability = 0.7f, tempo = 125f),
         "sad"       to AudioFeatures(valence = 0.2f, energy = 0.3f, danceability = 0.3f, tempo = 85f),
@@ -94,16 +81,72 @@ class RLRecommendationEngine {
         "neutral"   to AudioFeatures(valence = 0.5f, energy = 0.5f, danceability = 0.5f, tempo = 110f)
     )
 
+    // ── Session tracking API ──────────────────────────────────────────
+
     /**
-     * Load RL state from Firebase
+     * Call this when a track starts playing.
+     * Enables implicit skip/complete detection.
      */
+    fun onTrackStarted(mood: String, query: String, durationMs: Long) {
+        currentTrackStartMs = System.currentTimeMillis()
+        currentTrackDurationMs = durationMs
+        currentTrackQuery = query
+        currentMood = mood
+        if (sessionStartMs == 0L) sessionStartMs = currentTrackStartMs
+    }
+
+    /**
+     * Call this when user skips or track ends.
+     * Returns the listen ratio so HomeScreen can decide whether to fire SKIPPED/COMPLETED.
+     */
+    fun onTrackEnded(wasSkipped: Boolean): Float {
+        if (currentTrackStartMs == 0L || currentTrackDurationMs == 0L) return 0f
+        val listenedMs = System.currentTimeMillis() - currentTrackStartMs
+        val ratio = (listenedMs.toFloat() / currentTrackDurationMs).coerceIn(0f, 1f)
+
+        // Update query weights based on listen ratio
+        if (currentTrackQuery.isNotEmpty() && currentMood.isNotEmpty()) {
+            val queryKey = "${currentMood}:${currentTrackQuery}"
+            val currentWeight = queryWeights[queryKey] ?: 0f
+            // Skip in <15s = strong negative, >80% = positive, in between = proportional
+            val queryReward = when {
+                wasSkipped && listenedMs < 15_000 -> -0.6f
+                ratio > 0.8f                      -> +0.5f
+                ratio > 0.5f                      -> +0.2f
+                else                              -> -0.1f
+            }
+            // Exponential moving average with 0.3 learning rate
+            queryWeights[queryKey] = currentWeight + 0.3f * (queryReward - currentWeight)
+            Log.d(TAG, "Query weight update: $queryKey → ${queryWeights[queryKey]} (ratio=$ratio)")
+        }
+
+        currentTrackStartMs = 0L
+        return ratio
+    }
+
+    /**
+     * Get query weight score for a candidate query (used by MoodAwareRecommender).
+     * Returns value in range roughly [-1, 1]. Higher = historically better for this mood.
+     */
+    fun getQueryScore(mood: String, query: String): Float {
+        // Score = average weight across all keywords in the query
+        val keywords = query.lowercase().split(" ").filter { it.length > 3 }
+        if (keywords.isEmpty()) return 0f
+        var totalScore = 0f
+        var hits = 0
+        for (word in keywords) {
+            val key = "${mood}:${word}"
+            queryWeights[key]?.let { totalScore += it; hits++ }
+        }
+        return if (hits > 0) totalScore / hits else 0f
+    }
+
+    // ── Firebase persistence ──────────────────────────────────────────
+
     suspend fun loadState() {
         val userId = auth.currentUser?.uid ?: return
         try {
-            val doc = firestore.collection("rl_state")
-                .document(userId)
-                .get().await()
-
+            val doc = firestore.collection("rl_state").document(userId).get().await()
             if (doc.exists()) {
                 totalInteractions = (doc.getLong("totalInteractions") ?: 0).toInt()
 
@@ -119,7 +162,16 @@ class RLRecommendationEngine {
                         interactionCount = (data["interactionCount"] as? Long)?.toInt() ?: 0
                     )
                 }
-                Log.d(TAG, "Loaded RL state: $totalInteractions interactions, ${moodFeatureMap.size} moods")
+
+                // ── Load query weights ────────────────────────────────
+                @Suppress("UNCHECKED_CAST")
+                val weights = doc.get("queryWeights") as? Map<String, Double>
+                weights?.forEach { (key, value) ->
+                    queryWeights[key] = value.toFloat()
+                }
+
+                Log.d(TAG, "Loaded RL state: $totalInteractions interactions, " +
+                        "${moodFeatureMap.size} moods, ${queryWeights.size} query weights")
             } else {
                 initializeDefaults()
             }
@@ -131,9 +183,6 @@ class RLRecommendationEngine {
         }
     }
 
-    /**
-     * Save RL state to Firebase
-     */
     private suspend fun saveState() {
         val userId = auth.currentUser?.uid ?: return
         try {
@@ -147,14 +196,12 @@ class RLRecommendationEngine {
                     "interactionCount" to state.interactionCount
                 )
             }
-
-            firestore.collection("rl_state")
-                .document(userId)
-                .set(mapOf(
-                    "totalInteractions" to totalInteractions,
-                    "moodFeatures" to moodData,
-                    "lastUpdated" to com.google.firebase.Timestamp.now()
-                )).await()
+            firestore.collection("rl_state").document(userId).set(mapOf(
+                "totalInteractions" to totalInteractions,
+                "moodFeatures" to moodData,
+                "queryWeights" to queryWeights,          // ← persist weights
+                "lastUpdated" to com.google.firebase.Timestamp.now()
+            )).await()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save RL state", e)
         }
@@ -173,152 +220,119 @@ class RLRecommendationEngine {
         }
     }
 
-    /**
-     * Get optimal feature targets for Spotify recommendations API.
-     * Uses Upper Confidence Bound (UCB) exploration strategy:
-     * less-explored moods get wider feature ranges to encourage discovery.
-     */
+    // ── Feature targets (unchanged) ───────────────────────────────────
+
     fun getFeatureTargets(mood: String, hourOfDay: Int = -1): FeatureTargets {
         val state = moodFeatureMap[mood] ?: moodFeatureMap["neutral"]!!
-
-        // Exploration radius: wider when fewer interactions (UCB-inspired)
         val explorationBonus = if (state.interactionCount > 0) {
-            (0.15f * sqrt(ln(totalInteractions.toFloat() + 1f) / state.interactionCount)).coerceAtMost(0.3f)
-        } else {
-            0.3f // Maximum exploration for unknown moods
-        }
+            (0.15f * sqrt(ln(totalInteractions.toFloat() + 1f) / state.interactionCount))
+                .coerceAtMost(0.3f)
+        } else 0.3f
 
-        // Time-of-day adjustment
         val timeEnergyShift = when (hourOfDay) {
-            in 6..9   -> -0.1f   // Morning: slightly calmer
-            in 10..14 -> 0.05f   // Midday: slightly more energy
-            in 15..17 -> 0f      // Afternoon: neutral
-            in 18..21 -> 0.05f   // Evening: slightly up
-            in 22..23 -> -0.15f  // Night: wind down
-            in 0..5   -> -0.2f   // Late night: very calm
+            in 6..9   -> -0.1f
+            in 10..14 -> 0.05f
+            in 15..17 -> 0f
+            in 18..21 -> 0.05f
+            in 22..23 -> -0.15f
+            in 0..5   -> -0.2f
             else -> 0f
         }
 
         val targetValence = (state.valence + timeEnergyShift * 0.5f).coerceIn(0f, 1f)
-        val targetEnergy = (state.energy + timeEnergyShift).coerceIn(0f, 1f)
+        val targetEnergy  = (state.energy  + timeEnergyShift).coerceIn(0f, 1f)
 
         return FeatureTargets(
-            targetValence = targetValence,
-            targetEnergy = targetEnergy,
+            targetValence     = targetValence,
+            targetEnergy      = targetEnergy,
             targetDanceability = state.danceability,
-            targetTempo = state.tempo,
-            minValence = (targetValence - explorationBonus).coerceIn(0f, 1f),
-            maxValence = (targetValence + explorationBonus).coerceIn(0f, 1f),
-            minEnergy = (targetEnergy - explorationBonus).coerceIn(0f, 1f),
-            maxEnergy = (targetEnergy + explorationBonus).coerceIn(0f, 1f)
+            targetTempo       = state.tempo,
+            minValence        = (targetValence - explorationBonus).coerceIn(0f, 1f),
+            maxValence        = (targetValence + explorationBonus).coerceIn(0f, 1f),
+            minEnergy         = (targetEnergy  - explorationBonus).coerceIn(0f, 1f),
+            maxEnergy         = (targetEnergy  + explorationBonus).coerceIn(0f, 1f)
         )
     }
 
-    /**
-     * Record a reward event and update the model.
-     * This is the core RL update step.
-     */
+    // ── Reward processing (updated) ───────────────────────────────────
+
     suspend fun recordReward(event: RewardEvent) {
         val mood = event.mood
         val state = moodFeatureMap[mood] ?: return
 
-        // Calculate composite reward
         var reward = event.type.weight
         if (event.type == RewardType.LISTEN_DURATION) {
-            // Scale by how much of the song was listened to
-            // >80% = strong positive, <20% = negative
-            reward = (event.durationRatio - 0.3f) * 1.5f // Maps 0-1 to roughly -0.45 to +1.05
+            reward = (event.durationRatio - 0.3f) * 1.5f
         }
 
-        // Update features toward the track's features if reward is positive,
-        // away if negative (exponential weighted moving average)
-        val features = event.trackFeatures ?: return
+        // Update audio feature preferences if we have track features
+        val features = event.trackFeatures
+        if (features != null) {
+            val learningRate = 0.1f / (1f + state.interactionCount * 0.01f)
+            val direction = if (reward > 0) 1f else -1f
+            val magnitude = kotlin.math.abs(reward) * learningRate
 
-        val learningRate = 0.1f / (1f + state.interactionCount * 0.01f) // Decaying LR
-        val direction = if (reward > 0) 1f else -1f
-        val magnitude = Math.abs(reward) * learningRate
+            state.valence      += direction * magnitude * (features.valence - state.valence)
+            state.energy       += direction * magnitude * (features.energy - state.energy)
+            state.danceability += direction * magnitude * (features.danceability - state.danceability)
+            state.tempo        += direction * magnitude * (features.tempo - state.tempo) * 0.1f
 
-        state.valence += direction * magnitude * (features.valence - state.valence)
-        state.energy += direction * magnitude * (features.energy - state.energy)
-        state.danceability += direction * magnitude * (features.danceability - state.danceability)
-        state.tempo += direction * magnitude * (features.tempo - state.tempo) * 0.1f // Smaller tempo updates
+            state.valence      = state.valence.coerceIn(0f, 1f)
+            state.energy       = state.energy.coerceIn(0f, 1f)
+            state.danceability = state.danceability.coerceIn(0f, 1f)
+            state.tempo        = state.tempo.coerceIn(60f, 200f)
+        }
 
-        // Clamp values
-        state.valence = state.valence.coerceIn(0f, 1f)
-        state.energy = state.energy.coerceIn(0f, 1f)
-        state.danceability = state.danceability.coerceIn(0f, 1f)
-        state.tempo = state.tempo.coerceIn(60f, 200f)
+        // ── NEW: also update query weights if query is provided ───────
+        if (event.queryUsed.isNotEmpty()) {
+            val keywords = event.queryUsed.lowercase().split(" ").filter { it.length > 3 }
+            for (word in keywords) {
+                val key = "${mood}:${word}"
+                val current = queryWeights[key] ?: 0f
+                queryWeights[key] = current + 0.2f * (reward - current)
+            }
+        }
 
-        // Update confidence
         state.interactionCount++
         state.confidence = (state.interactionCount.toFloat() / (state.interactionCount + 10f))
             .coerceIn(0f, 0.95f)
-
         totalInteractions++
-
         moodFeatureMap[mood] = state
 
-        // Save to Firebase periodically (every 5 interactions)
-        if (totalInteractions % 5 == 0) {
-            saveState()
-        }
+        if (totalInteractions % 5 == 0) saveState()
 
         Log.d(TAG, "RL update: mood=$mood, reward=$reward, " +
                 "valence=${state.valence}, energy=${state.energy}, " +
                 "interactions=${state.interactionCount}")
     }
 
-    /**
-     * Force save (call on app close)
-     */
-    suspend fun forceSave() {
-        saveState()
-    }
+    suspend fun forceSave() = saveState()
+    fun isReady() = isLoaded
 
-    fun isReady(): Boolean = isLoaded
-
-    /**
-     * Get mood-to-search query as fallback when Spotify recommendations API
-     * isn't available (no seed tracks).
-     * Uses learned features to generate smarter queries than static mapping.
-     */
     fun getMoodSearchQuery(mood: String): String {
         val state = moodFeatureMap[mood] ?: return mood
-
         val descriptors = mutableListOf<String>()
-
-        // Valence-based words
         when {
             state.valence > 0.7f -> descriptors.add("happy uplifting")
             state.valence > 0.5f -> descriptors.add("feel good")
             state.valence > 0.3f -> descriptors.add("mellow")
-            else -> descriptors.add("melancholy emotional")
+            else                 -> descriptors.add("melancholy emotional")
         }
-
-        // Energy-based words
         when {
             state.energy > 0.7f -> descriptors.add("high energy pump up")
             state.energy > 0.5f -> descriptors.add("upbeat")
             state.energy > 0.3f -> descriptors.add("moderate")
-            else -> descriptors.add("calm relaxing ambient")
+            else                -> descriptors.add("calm relaxing ambient")
         }
-
-        // Danceability
         if (state.danceability > 0.7f) descriptors.add("dance")
-
-        // Tempo hints
         when {
             state.tempo > 130f -> descriptors.add("fast")
-            state.tempo < 90f -> descriptors.add("slow")
+            state.tempo < 90f  -> descriptors.add("slow")
         }
-
         return descriptors.joinToString(" ")
     }
 }
 
-/**
- * Mutable state for a single mood's learned feature preferences
- */
 data class MoodFeatureState(
     var valence: Float,
     var energy: Float,
