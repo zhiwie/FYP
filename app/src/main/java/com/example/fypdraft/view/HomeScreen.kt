@@ -17,7 +17,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -130,6 +129,10 @@ fun HomeScreen(
     petRepository: PetRepository? = null,
     themeState: AppThemeState = AppThemeState(),
     isPlayingMusic: Boolean = false,
+    // ── Mood persistence — owned by MoodSyncApp (root), passed down ───────
+    savedMoodKey: String? = null,
+    onMoodSelected: (String) -> Unit = {},
+    // ─────────────────────────────────────────────────────────────────────
     onNavigateToSearch: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
     onNavigateToLibrary: () -> Unit = {},
@@ -174,29 +177,22 @@ fun HomeScreen(
     var loadError by remember { mutableStateOf<String?>(null) }
     var hasLoaded by remember { mutableStateOf(false) }
 
-    // ── Mood persistence — rememberSaveable survives back-stack navigation ────
-    // savedMoodKey holds the user's last manually chosen mood key (e.g. "energetic").
-    // rememberSaveable writes through Compose's SavedStateHandle so it survives:
-    //   • Recomposition
-    //   • Navigation back from MusicPlayer / Chat screens
-    //   • Activity recreation (rotation, low-memory kills)
-    var savedMoodKey by rememberSaveable { mutableStateOf<String?>(null) }
-
-    // mascotMood is the live displayed mood. On first run it uses auto-detection.
-    // Once the user picks manually, savedMoodKey is written and mascotMood is kept
-    // in sync by the restore effect below.
+    // ── mascotMood: derive from savedMoodKey (root state) or auto-detect ─
+    // savedMoodKey is now owned by MoodSyncApp and survives ALL navigation.
     var mascotMood by remember {
-        mutableStateOf(MascotMoodDetector.detectMood())
+        val initial = if (savedMoodKey != null)
+            MascotMoodDetector.getMoodForKey(savedMoodKey).copy(isUserOverride = true)
+        else
+            MascotMoodDetector.detectMood()
+        mutableStateOf(initial)
     }
 
-    // ── Restore user's choice whenever composition rebuilds ──────────────────
-    // This runs once per composition. If savedMoodKey already has a value from a
-    // previous user selection (survived navigation), restore it immediately so the
-    // UI never shows the wrong mood.
+    // Keep mascotMood in sync if savedMoodKey changes externally
+    // (e.g. first composition after returning from another screen)
     LaunchedEffect(savedMoodKey) {
-        val saved = savedMoodKey
-        if (saved != null && (!mascotMood.isUserOverride || mascotMood.mood != saved)) {
-            mascotMood = MascotMoodDetector.getMoodForKey(saved).copy(isUserOverride = true)
+        val key = savedMoodKey
+        if (key != null && (!mascotMood.isUserOverride || mascotMood.mood != key)) {
+            mascotMood = MascotMoodDetector.getMoodForKey(key).copy(isUserOverride = true)
         }
     }
 
@@ -239,16 +235,14 @@ fun HomeScreen(
     val passiveMood       by passiveMoodDetector.detectedMood.collectAsState()
     val passiveConfidence by passiveMoodDetector.confidence.collectAsState()
 
-    // ── Passive detection — blocked when user has made a manual choice ────────
+    // ── Passive detection — blocked when user has a saved choice ──────────
     LaunchedEffect(passiveMood, passiveConfidence) {
-        val saved = savedMoodKey
-        if (saved != null) {
-            // User has a saved choice — always restore it, never let passive override it
-            if (!mascotMood.isUserOverride || mascotMood.mood != saved)
-                mascotMood = MascotMoodDetector.getMoodForKey(saved).copy(isUserOverride = true)
+        if (savedMoodKey != null) {
+            // User has a saved choice — always restore it
+            if (!mascotMood.isUserOverride || mascotMood.mood != savedMoodKey)
+                mascotMood = MascotMoodDetector.getMoodForKey(savedMoodKey).copy(isUserOverride = true)
             return@LaunchedEffect
         }
-        // No manual choice yet — allow passive detection
         if (passiveConfidence >= 0.5f && isPlayingMusic) {
             val newMood = MascotMoodDetector.getMoodForKey(passiveMood)
             if (newMood.mood != mascotMood.mood) {
@@ -259,7 +253,7 @@ fun HomeScreen(
         }
     }
 
-    // ── Track change — re-apply user's mood after each track switch ───────────
+    // ── Track change — re-apply user's mood after each track switch ───────
     var previousTrackId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(currentTrack?.id) {
         val newId = currentTrack?.id; val prevId = previousTrackId
@@ -269,11 +263,9 @@ fun HomeScreen(
             scope.launch {
                 rlEngine.recordReward(RewardEvent(type = rewardType, mood = mascotMood.mood, trackFeatures = null, durationRatio = listenRatio, queryUsed = ""))
             }
-            // Re-apply saved mood after track change — this is the key fix for the
-            // "mood reverts when returning from music player" issue
-            val saved = savedMoodKey
-            if (saved != null)
-                mascotMood = MascotMoodDetector.getMoodForKey(saved).copy(isUserOverride = true)
+            // Re-apply saved mood after track change
+            if (savedMoodKey != null)
+                mascotMood = MascotMoodDetector.getMoodForKey(savedMoodKey).copy(isUserOverride = true)
         }
         if (newId != null) rlEngine.onTrackStarted(mascotMood.mood, "", currentTrack?.durationMs ?: 0L)
         previousTrackId = newId
@@ -426,18 +418,19 @@ fun HomeScreen(
                             }
                     ) {
                         MascotWidget(
-                            mood           = mascotMood,
-                            petState       = petState,
-                            petRepository  = localPetRepo,
-                            chatMessage    = chatMessage,
-                            onQuickReply   = { },
-                            onTapMascot    = { },
-                            onChangeMood   = { showMoodPicker = true },
-                            onEditMascot   = { onNavigateToPetShop() },
-                            onOpenChat     = { msg -> onNavigateToEmotionChat(msg) },
-                            onSendMessage  = { msg -> onNavigateToEmotionChat(msg) },
+                            mood               = mascotMood,
+                            petState           = petState,
+                            petRepository      = localPetRepo,
+                            chatMessage        = chatMessage,
+                            onQuickReply       = { },
+                            onTapMascot        = { },
+                            onChangeMood       = { showMoodPicker = true },
+                            onEditMascot       = { onNavigateToPetShop() },
+                            onOpenChat         = { msg -> onNavigateToEmotionChat(msg) },
+                            onSendMessage      = { msg -> onNavigateToEmotionChat(msg) },
                             isPlayingMusic     = isPlayingMusic,
-                            personalityProfile = personalityProfile
+                            personalityProfile = personalityProfile,
+                            themeState         = themeState
                         )
                     }
 
@@ -510,16 +503,21 @@ fun HomeScreen(
     }
 
     if (showMoodPicker) {
-        MoodPickerDialog(currentMood = mascotMood.mood, onSelect = { selected ->
-            val old = mascotMood.mood
-            // 1. Update display
-            mascotMood = MascotMoodDetector.getMoodForKey(selected).copy(isUserOverride = true)
-            // 2. Persist via rememberSaveable — survives back-stack navigation
-            savedMoodKey = selected
-            chatMessage = null; showMoodPicker = false
-            moodHistoryRepo.saveMoodExplicit(selected, "Changed from $old to $selected")
-            scope.launch { rlEngine.recordReward(RewardEvent(RewardType.MOOD_OVERRIDE, old, null)) }
-        }, onDismiss = { showMoodPicker = false })
+        MoodPickerDialog(
+            currentMood = mascotMood.mood,
+            isDark      = isDark,
+            onSelect    = { selected ->
+                val old = mascotMood.mood
+                // 1. Update display mood
+                mascotMood = MascotMoodDetector.getMoodForKey(selected).copy(isUserOverride = true)
+                // 2. Propagate to root — this survives ALL navigation
+                onMoodSelected(selected)
+                chatMessage = null; showMoodPicker = false
+                moodHistoryRepo.saveMoodExplicit(selected, "Changed from $old to $selected")
+                scope.launch { rlEngine.recordReward(RewardEvent(RewardType.MOOD_OVERRIDE, old, null)) }
+            },
+            onDismiss = { showMoodPicker = false }
+        )
     }
 }
 
@@ -624,10 +622,12 @@ fun BottomNavBar(
         Triple(Icons.Filled.People, "Friends", onFriends), Triple(Icons.Filled.LibraryMusic, "Library", onLibrary)
     )
     val p = themeState.activePalette; val isDark = themeState.isDark; val speed = themeState.transitionSpeed
-    val navBg    by animateColorAsState(if (isDark) p.darkBottom else p.lightBottom, tween(speed), label = "navBg")
-    val selColor by animateColorAsState(if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E), tween(speed), label = "navSel")
-    val unselColor = if (isDark) Color(0xFF888899) else Color(0xFF9E9E9E)
-    val divColor by animateColorAsState(if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.08f), tween(speed), label = "navDiv")
+    val navBg     by animateColorAsState(if (isDark) p.darkBottom else p.lightBottom, tween(speed), label = "navBg")
+    // Selected: white on dark, near-black on light
+    val selColor  by animateColorAsState(if (isDark) Color(0xFFFFFFFF) else Color(0xFF1A1A2E), tween(speed), label = "navSel")
+    // Unselected: muted in both modes
+    val unselColor by animateColorAsState(if (isDark) Color(0xFF888899) else Color(0xFF757585), tween(speed), label = "navUnsel")
+    val divColor  by animateColorAsState(if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.08f), tween(speed), label = "navDiv")
     Column {
         HorizontalDivider(thickness = 0.6.dp, color = divColor)
         NavigationBar(containerColor = navBg, tonalElevation = 0.dp, modifier = Modifier.height(72.dp)) {
@@ -639,9 +639,11 @@ fun BottomNavBar(
                     label = { Text(label, fontSize = 10.sp, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1) },
                     alwaysShowLabel = true,
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = selColor, selectedTextColor = selColor,
-                        unselectedIconColor = unselColor, unselectedTextColor = unselColor,
-                        indicatorColor = Color.Transparent
+                        selectedIconColor   = selColor,
+                        selectedTextColor   = selColor,
+                        unselectedIconColor = unselColor,
+                        unselectedTextColor = unselColor,
+                        indicatorColor      = Color.Transparent
                     )
                 )
             }
@@ -664,8 +666,8 @@ fun MiniMusicPlayer(vm: MusicPlayerViewModel?, onNav: () -> Unit, themeState: Ap
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(t.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(t.name,   fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f),  maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = { vm?.togglePlayPause() }) {
                 Icon(if (ps.value.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "PlayPause", tint = Color.White)
@@ -680,8 +682,8 @@ private fun ProfileDrawerContent(
     onSettings: () -> Unit, onSpotify: () -> Unit, onMoodHistory: () -> Unit, onSignOut: () -> Unit
 ) {
     val bg  = if (isDark) Color(0xFF1C1C2E) else Color.White
-    val tc  = if (isDark) Color(0xFFE8E8F0) else Color.Black
-    val sc  = if (isDark) Color(0xFF888899) else Color.Gray
+    val tc  = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val sc  = if (isDark) Color(0xFF888899) else Color(0xFF666677)
     val av  = if (isDark) Color(0xFF2A2A4A) else Color(0xFF1A1A2E)
     val div = if (isDark) Color(0xFF2A2A3A) else Color(0xFFEEEEEE)
     ModalDrawerSheet(Modifier.width(300.dp), drawerContainerColor = bg) {
@@ -694,10 +696,9 @@ private fun ProfileDrawerContent(
             Text(displayName, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = tc)
             Text(email, fontSize = 13.sp, color = sc)
             Spacer(Modifier.height(32.dp)); HorizontalDivider(color = div); Spacer(Modifier.height(16.dp))
-            DrawerItem(Icons.Filled.Settings, "Settings", onSettings, tc)
-            DrawerItem(Icons.Filled.Link, "Connect Spotify", onSpotify, tc)
-            DrawerItem(Icons.Filled.Favorite, "Favorites", {}, tc)
-            DrawerItem(Icons.Filled.BarChart, "Mood Recap", onMoodHistory, tc)
+            DrawerItem(Icons.Filled.Settings,    "Settings",        onSettings,    tc)
+            DrawerItem(Icons.Filled.Link,         "Connect Spotify", onSpotify,     tc)
+            DrawerItem(Icons.Filled.BarChart,     "Mood Recap",      onMoodHistory, tc)
             Spacer(Modifier.weight(1f)); HorizontalDivider(color = div); Spacer(Modifier.height(12.dp))
             DrawerItem(Icons.Filled.Logout, "Sign Out", onSignOut, Color.Red)
         }
@@ -705,45 +706,72 @@ private fun ProfileDrawerContent(
 }
 
 @Composable
-private fun DrawerItem(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color = Color.Black) {
+private fun DrawerItem(icon: ImageVector, label: String, onClick: () -> Unit, tint: Color) {
     Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(16.dp))
         Text(label, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = tint)
     }
 }
 
+// ── Mood picker — theme-aware ─────────────────────────────────────────────
+
 @Composable
-private fun MoodPickerDialog(currentMood: String, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+private fun MoodPickerDialog(
+    currentMood: String,
+    isDark: Boolean = false,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val textColor     = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val subColor      = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
+    val selectedColor = Color(0xFF6A5ACD)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("How are you feeling?", fontWeight = FontWeight.Bold) },
+        title = { Text("How are you feeling?", fontWeight = FontWeight.Bold, color = textColor) },
         text = {
             Column {
                 MascotMoodDetector.allMoodKeys().forEach { mood ->
                     val d = MascotMoodDetector.getMoodForKey(mood)
-                    Row(Modifier.fillMaxWidth().clickable { onSelect(mood) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(d.emoji, fontSize = 24.sp); Spacer(Modifier.width(14.dp))
-                        Text(mood.replaceFirstChar { it.uppercase() }, fontSize = 16.sp,
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onSelect(mood) }.padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(d.emoji, fontSize = 24.sp)
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            mood.replaceFirstChar { it.uppercase() }, fontSize = 16.sp,
                             fontWeight = if (mood == currentMood) FontWeight.Bold else FontWeight.Normal,
-                            color = if (mood == currentMood) Color(0xFF6A5ACD) else Color.Black)
-                        if (mood == currentMood) { Spacer(Modifier.weight(1f)); Icon(Icons.Filled.Check, null, tint = Color(0xFF6A5ACD), modifier = Modifier.size(20.dp)) }
+                            color = if (mood == currentMood) selectedColor else textColor
+                        )
+                        if (mood == currentMood) {
+                            Spacer(Modifier.weight(1f))
+                            Icon(Icons.Filled.Check, null, tint = selectedColor, modifier = Modifier.size(20.dp))
+                        }
                     }
                 }
             }
         },
-        confirmButton = {}, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        confirmButton  = {},
+        dismissButton  = { TextButton(onClick = onDismiss) { Text("Cancel", color = subColor) } }
     )
 }
 
 private fun getTimeGreeting(): String {
     return when (java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)) {
-        in 5..11 -> "Good morning"; in 12..16 -> "Good afternoon"; in 17..20 -> "Good evening"; else -> "Good night"
+        in 5..11  -> "Good morning"
+        in 12..16 -> "Good afternoon"
+        in 17..20 -> "Good evening"
+        else      -> "Good night"
     }
 }
 
 private fun getMoodSubtitle(mood: String): String = when (mood.lowercase()) {
-    "happy" -> "You're in a great mood today ✨"; "sad" -> "Here's something to lift you up 🌧️"
-    "energetic" -> "Let's keep that energy going ⚡"; "relaxed" -> "Time to unwind 🌿"
-    "focused" -> "Stay in the zone 🎯"; "romantic" -> "Setting the mood 💫"
-    "tired" -> "Gentle vibes incoming 🌙"; else -> "What's your vibe today? 🎶"
+    "happy"     -> "You're in a great mood today ✨"
+    "sad"       -> "Here's something to lift you up 🌧️"
+    "energetic" -> "Let's keep that energy going ⚡"
+    "relaxed"   -> "Time to unwind 🌿"
+    "focused"   -> "Stay in the zone 🎯"
+    "romantic"  -> "Setting the mood 💫"
+    "tired"     -> "Gentle vibes incoming 🌙"
+    else        -> "What's your vibe today? 🎶"
 }

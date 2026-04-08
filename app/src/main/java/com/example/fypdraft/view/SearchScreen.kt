@@ -51,6 +51,16 @@ fun SearchScreen(
     onBack: () -> Unit = {},
     currentTab: Int = 1
 ) {
+    val isDark = themeState.isDark
+
+    // ── Theme-aware colors ────────────────────────────────────────────────
+    val primaryText   = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val secondaryText = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
+    val searchBg      = if (isDark) Color(0xFF2A2A3E) else Color.White
+    val searchBorder  = if (isDark) Color(0xFF3A3A5A) else Color.LightGray
+    val iconTint      = if (isDark) Color(0xFF9E9EBB) else Color(0xFF666677)
+    val resultBg      = if (isDark) Color(0xFF1E1E2E) else Color(0xFFF8F8F8)
+
     val scope = rememberCoroutineScope()
     val searchHistoryRepo = remember { SearchHistoryRepository() }
     val spotifyMusicRepo = remember(spotifyRepository) {
@@ -59,26 +69,25 @@ fun SearchScreen(
 
     val hasToken = spotifyRepository?.getAccessToken() != null
 
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery   by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<Track>>(emptyList()) }
-    var isSearching by remember { mutableStateOf(false) }
+    var isSearching   by remember { mutableStateOf(false) }
     var recentSearches by remember { mutableStateOf<List<String>>(emptyList()) }
-    var searchJob by remember { mutableStateOf<Job?>(null) }
+    var searchJob     by remember { mutableStateOf<Job?>(null) }
 
     val categories = remember {
         listOf(
-            MoodCategory("Happy", "😊", "happy uplifting feel good hits", listOf(Color(0xFFFFB347), Color(0xFFFF6B6B))),
-            MoodCategory("Chill", "😌", "chill lofi relaxing beats", listOf(Color(0xFF89CFF0), Color(0xFF6A9BD1))),
-            MoodCategory("Energetic", "⚡", "energetic workout pump up", listOf(Color(0xFFFF416C), Color(0xFFFF4B2B))),
-            MoodCategory("Sad", "😢", "sad emotional heartbreak", listOf(Color(0xFF667EEA), Color(0xFF764BA2))),
-            MoodCategory("Focus", "🎯", "focus study instrumental concentration", listOf(Color(0xFF11998E), Color(0xFF38EF7D))),
-            MoodCategory("Romance", "💕", "romantic love songs slow dance", listOf(Color(0xFFEE9CA7), Color(0xFFFFC3A0))),
-            MoodCategory("Throwback", "🕹️", "throwback 90s 2000s classics", listOf(Color(0xFFFFA751), Color(0xFFFFE259))),
-            MoodCategory("Sleep", "😴", "sleep ambient calming lullaby", listOf(Color(0xFF2C3E50), Color(0xFF4CA1AF)))
+            MoodCategory("Happy",    "😊", "happy uplifting feel good hits",          listOf(Color(0xFFFFB347), Color(0xFFFF6B6B))),
+            MoodCategory("Chill",    "😌", "chill lofi relaxing beats",               listOf(Color(0xFF89CFF0), Color(0xFF6A9BD1))),
+            MoodCategory("Energetic","⚡", "energetic workout pump up",               listOf(Color(0xFFFF416C), Color(0xFFFF4B2B))),
+            MoodCategory("Sad",      "😢", "sad emotional heartbreak",                listOf(Color(0xFF667EEA), Color(0xFF764BA2))),
+            MoodCategory("Focus",    "🎯", "focus study instrumental concentration",  listOf(Color(0xFF11998E), Color(0xFF38EF7D))),
+            MoodCategory("Romance",  "💕", "romantic love songs slow dance",          listOf(Color(0xFFEE9CA7), Color(0xFFFFC3A0))),
+            MoodCategory("Throwback","🕹️", "throwback 90s 2000s classics",           listOf(Color(0xFFFFA751), Color(0xFFFFE259))),
+            MoodCategory("Sleep",    "😴", "sleep ambient calming lullaby",           listOf(Color(0xFF2C3E50), Color(0xFF4CA1AF)))
         )
     }
 
-    // Load recent searches
     LaunchedEffect(Unit) {
         if (hasToken) {
             recentSearches = try {
@@ -87,59 +96,55 @@ fun SearchScreen(
         }
     }
 
-    // Debounced search
     LaunchedEffect(searchQuery) {
         searchJob?.cancel()
-
         if (searchQuery.length < 2 || spotifyMusicRepo == null) {
-            searchResults = emptyList()
-            isSearching = false
-            return@LaunchedEffect
+            searchResults = emptyList(); isSearching = false; return@LaunchedEffect
         }
-
         searchJob = scope.launch {
-            isSearching = true
-            delay(400)
-
+            isSearching = true; delay(400)
             Log.d("SearchScreen", "Searching Spotify for: '$searchQuery'")
             val results = spotifyMusicRepo.searchTracks(searchQuery, 10)
             Log.d("SearchScreen", "Got ${results.size} results")
-
-            searchResults = results
-            isSearching = false
-
-            if (searchQuery.length >= 3) {
-                searchHistoryRepo.saveSearch(searchQuery)
-            }
+            searchResults = results; isSearching = false
+            if (searchQuery.length >= 3) searchHistoryRepo.saveSearch(searchQuery)
         }
     }
 
     Scaffold(
         bottomBar = {
-            BottomNavBar(currentTab, onHome = onNavigateToHome, onSearch = {}, onFriends = onNavigateToFriends, onLibrary = onNavigateToLibrary, themeState = themeState)
+            BottomNavBar(
+                currentTab, onHome = onNavigateToHome, onSearch = {},
+                onFriends = onNavigateToFriends, onLibrary = onNavigateToLibrary, themeState = themeState
+            )
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)) {
-
+        Column(
+            Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)
+        ) {
             // Search bar
             OutlinedTextField(
-                value = searchQuery,
+                value         = searchQuery,
                 onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                placeholder = { Text("Search songs, artists, albums...", color = Color.Gray) },
-                leadingIcon = { Icon(Icons.Filled.Search, null, tint = Color.Gray) },
-                trailingIcon = {
+                modifier      = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                placeholder   = { Text("Search songs, artists, albums...", color = secondaryText) },
+                leadingIcon   = { Icon(Icons.Filled.Search, null, tint = iconTint) },
+                trailingIcon  = {
                     when {
-                        isSearching -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        isSearching          -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         searchQuery.isNotEmpty() -> IconButton(onClick = { searchQuery = ""; searchResults = emptyList() }) {
-                            Icon(Icons.Filled.Close, "Clear", tint = Color.Gray)
+                            Icon(Icons.Filled.Close, "Clear", tint = iconTint)
                         }
                     }
                 },
-                shape = RoundedCornerShape(28.dp),
+                shape  = RoundedCornerShape(28.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White, unfocusedContainerColor = Color.White,
-                    focusedBorderColor = Color.LightGray, unfocusedBorderColor = Color.Transparent
+                    focusedContainerColor   = searchBg,
+                    unfocusedContainerColor = searchBg,
+                    focusedBorderColor      = searchBorder,
+                    unfocusedBorderColor    = Color.Transparent,
+                    focusedTextColor        = primaryText,
+                    unfocusedTextColor      = primaryText
                 ),
                 singleLine = true
             )
@@ -149,20 +154,19 @@ fun SearchScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("🎵", fontSize = 48.sp)
                         Spacer(Modifier.height(12.dp))
-                        Text("Connect Spotify to search music", color = Color.Gray, fontSize = 15.sp)
+                        Text("Connect Spotify to search music", color = secondaryText, fontSize = 15.sp)
                     }
                 }
             } else if (searchResults.isNotEmpty()) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    contentPadding      = PaddingValues(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     item {
-                        Text("${searchResults.size} results", fontSize = 13.sp, color = Color.Gray,
-                            modifier = Modifier.padding(vertical = 4.dp))
+                        Text("${searchResults.size} results", fontSize = 13.sp, color = secondaryText, modifier = Modifier.padding(vertical = 4.dp))
                     }
                     items(searchResults) { track ->
-                        SearchResultItem(track) {
+                        SearchResultItem(track, isDark = isDark, primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint) {
                             musicPlayerViewModel?.loadTrack(track, searchResults)
                             onNavigateToMusicPlayer()
                         }
@@ -171,20 +175,24 @@ fun SearchScreen(
                 }
             } else if (searchQuery.length >= 2 && !isSearching) {
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No results for \"$searchQuery\"", color = Color.Gray, fontSize = 14.sp)
+                    Text("No results for \"$searchQuery\"", color = secondaryText, fontSize = 14.sp)
                 }
             } else {
                 LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding      = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     if (recentSearches.isNotEmpty()) {
                         item {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("Recent searches", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment     = Alignment.CenterVertically
+                            ) {
+                                Text("Recent searches", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = secondaryText)
                                 TextButton(onClick = {
                                     scope.launch { searchHistoryRepo.clearSearchHistory(); recentSearches = emptyList() }
-                                }) { Text("Clear", color = Color.Gray, fontSize = 13.sp) }
+                                }) { Text("Clear", color = secondaryText, fontSize = 13.sp) }
                             }
                         }
                         items(recentSearches) { query ->
@@ -192,18 +200,17 @@ fun SearchScreen(
                                 Modifier.fillMaxWidth().clickable { searchQuery = query }.padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Filled.History, null, tint = Color.Gray, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Filled.History, null, tint = iconTint, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(12.dp))
-                                Text(query, fontSize = 15.sp, color = Color.Black, modifier = Modifier.weight(1f))
-                                Icon(Icons.Filled.NorthWest, null, tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                Text(query, fontSize = 15.sp, color = primaryText, modifier = Modifier.weight(1f))
+                                Icon(Icons.Filled.NorthWest, null, tint = iconTint, modifier = Modifier.size(16.dp))
                             }
                         }
                         item { Spacer(Modifier.height(8.dp)) }
                     }
 
                     item {
-                        Text("Browse by mood", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Gray,
-                            modifier = Modifier.padding(bottom = 4.dp))
+                        Text("Browse by mood", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = secondaryText, modifier = Modifier.padding(bottom = 4.dp))
                     }
                     items(categories.chunked(2)) { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -221,7 +228,15 @@ fun SearchScreen(
 }
 
 @Composable
-private fun SearchResultItem(track: Track, onClick: () -> Unit) {
+private fun SearchResultItem(
+    track: Track,
+    isDark: Boolean = false,
+    primaryText: Color = Color(0xFF1A1A2E),
+    secondaryText: Color = Color(0xFF666677),
+    iconTint: Color = Color(0xFF666677),
+    onClick: () -> Unit
+) {
+    val cardBg = if (isDark) Color(0xFF2A2A3E).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.6f)
     Row(
         Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -230,15 +245,15 @@ private fun SearchResultItem(track: Track, onClick: () -> Unit) {
             if (track.albumArtUrl.isNotEmpty()) {
                 AsyncImage(model = track.albumArtUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             } else {
-                Box(Modifier.fillMaxSize().background(Color(0xFFEEEEEE)), contentAlignment = Alignment.Center) { Text("🎵", fontSize = 20.sp) }
+                Box(Modifier.fillMaxSize().background(cardBg), contentAlignment = Alignment.Center) { Text("🎵", fontSize = 20.sp) }
             }
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(track.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${track.artist} · ${track.album}", fontSize = 13.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(track.name,   fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText,   maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${track.artist} · ${track.album}", fontSize = 13.sp, color = secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Icon(Icons.Filled.PlayArrow, null, tint = Color.Gray, modifier = Modifier.size(24.dp))
+        Icon(Icons.Filled.PlayArrow, null, tint = iconTint, modifier = Modifier.size(24.dp))
     }
 }
 

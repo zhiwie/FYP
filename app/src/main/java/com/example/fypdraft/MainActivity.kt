@@ -156,15 +156,20 @@ fun MoodSyncApp(
     musicPlayerViewModel: MusicPlayerViewModel,
     spotifyRepository: SpotifyRepository
 ) {
-    val authViewModel: AuthViewModel      = viewModel()
+    val authViewModel: AuthViewModel       = viewModel()
     val chatGPTViewModel: ChatGPTViewModel = viewModel()
-    val petRepository   = remember { PetRepository() }
-    val petState        by petRepository.petState.collectAsState()
-    val themeManager    = remember { ThemeManager(activity) }
-    val themeState      by themeManager.themeState.collectAsState()
+    val petRepository    = remember { PetRepository() }
+    val petState         by petRepository.petState.collectAsState()
+    val themeManager     = remember { ThemeManager(activity) }
+    val themeState       by themeManager.themeState.collectAsState()
 
     LaunchedEffect(petState.mood) { themeManager.updateMood(petState.mood) }
     LaunchedEffect(Unit) { petRepository.loadPet() }
+
+    // ── MOOD PERSISTENCE — lifted here so it survives all navigation ──────────
+    // rememberSaveable at the root survives back-stack changes, screen switches,
+    // and activity recreation. HomeScreen reads and writes this via its params.
+    var savedMoodKey by rememberSaveable { mutableStateOf<String?>(null) }
 
     val startScreen = remember {
         try { if (authViewModel.isUserLoggedIn()) Screen.HOME else Screen.WELCOME }
@@ -174,10 +179,10 @@ fun MoodSyncApp(
     val currentScreen = backStack.lastOrNull() ?: Screen.HOME
     val currentTab    = Screen.tabIndex(currentScreen)
 
-    fun navigateTo(s: String)      { if (backStack.lastOrNull() != s) backStack = backStack + s }
-    fun navigateBack(): Boolean    { if (backStack.size <= 1) return false; backStack = backStack.dropLast(1); return true }
-    fun replaceStack(s: String)    { backStack = listOf(s) }
-    fun bottomNav(dest: String)    { if (backStack.lastOrNull() != dest) backStack = listOf(Screen.HOME, dest) }
+    fun navigateTo(s: String)   { if (backStack.lastOrNull() != s) backStack = backStack + s }
+    fun navigateBack(): Boolean { if (backStack.size <= 1) return false; backStack = backStack.dropLast(1); return true }
+    fun replaceStack(s: String) { backStack = listOf(s) }
+    fun bottomNav(dest: String) { if (backStack.lastOrNull() != dest) backStack = listOf(Screen.HOME, dest) }
 
     BackHandler(enabled = backStack.size > 1) { navigateBack() }
 
@@ -206,10 +211,10 @@ fun MoodSyncApp(
     }
 
     // ── Sign-out helper ───────────────────────────────────────────────────
-    // Clear chat history FIRST (while uid is still available), THEN sign out.
     fun handleSignOut() {
-        chatGPTViewModel.clearConversation()   // clears UI + queues Firestore delete for current uid
-        authViewModel.signOut()                // Firebase signs out — uid becomes null after this
+        chatGPTViewModel.clearConversation()
+        authViewModel.signOut()
+        savedMoodKey = null          // clear persisted mood on sign-out
         replaceStack(Screen.WELCOME)
     }
 
@@ -223,9 +228,6 @@ fun MoodSyncApp(
             Screen.LOGIN -> LoginScreen(
                 viewModel        = authViewModel,
                 onLoginSuccess   = {
-                    // Reload chat history for the newly signed-in user.
-                    // FirebaseAuth.currentUser is valid here because LoginScreen
-                    // only calls onLoginSuccess after a successful sign-in.
                     val uid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
                     chatGPTViewModel.reloadHistoryForUser(uid)
                     replaceStack(Screen.HOME)
@@ -257,6 +259,10 @@ fun MoodSyncApp(
                 petRepository             = petRepository,
                 themeState                = themeState,
                 isPlayingMusic            = isPlaying,
+                // Pass the root-level savedMoodKey down so HomeScreen can read it
+                savedMoodKey              = savedMoodKey,
+                // HomeScreen calls this whenever the user picks a new mood
+                onMoodSelected            = { key -> savedMoodKey = key },
                 onNavigateToSearch        = { bottomNav(Screen.SEARCH) },
                 onNavigateToFriends       = { bottomNav(Screen.FRIENDS) },
                 onNavigateToLibrary       = { bottomNav(Screen.LIBRARY) },
@@ -271,14 +277,14 @@ fun MoodSyncApp(
             )
 
             Screen.SEARCH -> SearchScreen(
-                musicPlayerViewModel  = musicPlayerViewModel,
-                spotifyRepository     = spotifyRepository,
-                themeState            = themeState,
+                musicPlayerViewModel    = musicPlayerViewModel,
+                spotifyRepository       = spotifyRepository,
+                themeState              = themeState,
                 onNavigateToMusicPlayer = { navigateTo(Screen.MUSIC_PLAYER) },
-                onNavigateToHome      = { navigateBack() },
-                onNavigateToFriends   = { bottomNav(Screen.FRIENDS) },
-                onNavigateToLibrary   = { bottomNav(Screen.LIBRARY) },
-                currentTab            = 1
+                onNavigateToHome        = { navigateBack() },
+                onNavigateToFriends     = { bottomNav(Screen.FRIENDS) },
+                onNavigateToLibrary     = { bottomNav(Screen.LIBRARY) },
+                currentTab              = 1
             )
 
             Screen.FRIENDS -> FriendsScreen(
@@ -303,9 +309,9 @@ fun MoodSyncApp(
             )
 
             Screen.SETTINGS -> SettingsScreen(
-                themeState  = themeState,
-                onBack      = { navigateBack() },
-                onSignOut   = { handleSignOut() },
+                themeState        = themeState,
+                onBack            = { navigateBack() },
+                onSignOut         = { handleSignOut() },
                 onNavigateToTheme = { navigateTo(Screen.THEME) }
             )
 

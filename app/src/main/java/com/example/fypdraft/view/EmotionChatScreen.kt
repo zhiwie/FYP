@@ -42,8 +42,10 @@ import java.util.*
 
 private val AccentGreen = Color(0xFF1DB954)
 private val GlassWhite  = Color.White.copy(alpha = 0.08f)
-// User bubble — Copilot-style: light translucent, not green
+// User bubble — translucent white (Copilot-style)
 private val UserBubble  = Color.White.copy(alpha = 0.15f)
+// Song card — matches user bubble: glass/translucent white, not dark green
+private val SongCardBg  = Color.White.copy(alpha = 0.12f)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,7 +74,6 @@ fun EmotionChatScreen(
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     var detectedMood           by remember { mutableStateOf("neutral") }
 
-    // Auto-send pending message once
     var pendingSent by remember { mutableStateOf(false) }
     LaunchedEffect(pendingMessage) {
         if (!pendingMessage.isNullOrBlank() && !pendingSent) {
@@ -130,14 +131,14 @@ fun EmotionChatScreen(
     if (showClearConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
-            icon = { Icon(Icons.Default.DeleteForever, null, tint = Color(0xFFE57373), modifier = Modifier.size(32.dp)) },
+            icon  = { Icon(Icons.Default.DeleteForever, null, tint = Color(0xFFE57373), modifier = Modifier.size(32.dp)) },
             title = { Text("Clear all conversation?", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) },
-            text = {
+            text  = {
                 Text(
                     "This will permanently delete your entire chat history with ${petState.name}. " +
                             "All messages, song recommendations, and context will be lost and cannot be recovered.",
                     textAlign = TextAlign.Center, fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color     = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             },
             confirmButton = {
@@ -184,10 +185,10 @@ fun EmotionChatScreen(
                         PixelPet(
                             petState  = petState,
                             animation = when (typingState) {
-                                TypingState.Thinking          -> PetAnimation.FOCUSED_STARE
-                                TypingState.FindingSongs       -> PetAnimation.LISTENING
-                                TypingState.FilteringResponse  -> PetAnimation.DANCING
-                                else                          -> petState.animationForMood()
+                                TypingState.Thinking         -> PetAnimation.FOCUSED_STARE
+                                TypingState.FindingSongs      -> PetAnimation.LISTENING
+                                TypingState.FilteringResponse -> PetAnimation.DANCING
+                                else                         -> petState.animationForMood()
                             },
                             modifier = Modifier.size(34.dp)
                         )
@@ -265,10 +266,10 @@ fun EmotionChatScreen(
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 private fun getBuddyStatusText(petState: PetState, typingState: TypingState): String = when (typingState) {
-    TypingState.Thinking          -> "${petState.name} is thinking..."
-    TypingState.FindingSongs       -> "${petState.name} is finding songs..."
-    TypingState.FilteringResponse  -> "${petState.name} is curating..."
-    else                          -> "${petState.name} is listening with you"
+    TypingState.Thinking         -> "${petState.name} is thinking..."
+    TypingState.FindingSongs      -> "${petState.name} is finding songs..."
+    TypingState.FilteringResponse -> "${petState.name} is curating..."
+    else                         -> "${petState.name} is listening with you"
 }
 
 private fun detectMoodFromText(text: String): String {
@@ -287,13 +288,6 @@ private fun detectMoodFromText(text: String): String {
 
 private fun String.containsAny(vararg words: String): Boolean = words.any { this.contains(it) }
 
-/**
- * Formats a message timestamp as a short human-readable time string.
- * Shown below each individual message bubble.
- *   - Same day → "3:45 PM"
- *   - Yesterday → "Yesterday 3:45 PM"
- *   - Older → "Apr 3, 3:45 PM"
- */
 private fun formatMessageTime(timestamp: Long): String {
     val cal   = Calendar.getInstance().apply { timeInMillis = timestamp }
     val today = Calendar.getInstance()
@@ -319,28 +313,40 @@ private fun EmptyChatPlaceholder(
 ) {
     val suggestionBg = themeState.activePalette.accent.copy(alpha = 0.18f)
     Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
+        modifier            = Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Box(Modifier.size(120.dp).clip(CircleShape).background(AccentGreen.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(120.dp).clip(CircleShape).background(AccentGreen.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
             PixelPet(petState = petState, animation = PetAnimation.HAPPY_BOUNCE, modifier = Modifier.size(100.dp))
         }
         Spacer(Modifier.height(20.dp))
         Text("Hey! I'm ${petState.name}!", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
         Spacer(Modifier.height(4.dp))
-        Text("Tell me how you're feeling and\nI'll find the perfect music for you.",
-            fontSize = 14.sp, color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
+        Text(
+            "Tell me how you're feeling and\nI'll find the perfect music for you.",
+            fontSize = 14.sp, color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center
+        )
         Spacer(Modifier.height(28.dp))
         val suggestions = listOf("I need to relax 😌", "Feeling energetic ⚡", "I'm a bit sad 😢", "Help me focus 🎯")
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             suggestions.chunked(2).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { text ->
-                        Surface(shape = RoundedCornerShape(20.dp), color = suggestionBg, shadowElevation = 8.dp,
-                            modifier = Modifier.weight(1f).clickable { onSuggestionClick(text) }) {
-                            Text(text, Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                fontSize = 13.sp, color = Color.White.copy(alpha = 0.9f), textAlign = TextAlign.Center)
+                        Surface(
+                            shape         = RoundedCornerShape(20.dp),
+                            color         = suggestionBg,
+                            shadowElevation = 8.dp,
+                            modifier      = Modifier.weight(1f).clickable { onSuggestionClick(text) }
+                        ) {
+                            Text(
+                                text,
+                                Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                fontSize = 13.sp, color = Color.White.copy(alpha = 0.9f), textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }
@@ -350,9 +356,6 @@ private fun EmptyChatPlaceholder(
 }
 
 // ── Chat bubble ───────────────────────────────────────────────────────────
-// Each bubble shows its exact send time below it.
-// User   → translucent white bubble + time right-aligned below
-// Mascot → no bubble (plain text) + time left-aligned below
 
 @Composable
 private fun ChatBubble(
@@ -369,7 +372,6 @@ private fun ChatBubble(
         modifier              = Modifier.fillMaxWidth().padding(vertical = 3.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        // Inline pet avatar for AI messages
         if (!isUser) {
             Box(
                 modifier         = Modifier.size(32.dp).clip(CircleShape).background(AccentGreen.copy(alpha = 0.2f)),
@@ -384,10 +386,8 @@ private fun ChatBubble(
             modifier            = Modifier.widthIn(max = 300.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
-            // Text bubble / plain text
             if (message.text.isNotBlank()) {
                 if (isUser) {
-                    // User → translucent white bubble (Copilot-style)
                     Surface(
                         shape = RoundedCornerShape(topStart = 18.dp, topEnd = 4.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
                         color = UserBubble
@@ -395,39 +395,27 @@ private fun ChatBubble(
                         Text(
                             message.text,
                             modifier   = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            color      = Color.White,
-                            fontSize   = 14.sp,
-                            lineHeight = 20.sp
+                            color      = Color.White, fontSize = 14.sp, lineHeight = 20.sp
                         )
                     }
                 } else {
-                    // Mascot → no bubble, plain text on background
                     Text(
                         message.text,
                         modifier   = Modifier.padding(start = 2.dp, end = 4.dp, top = 4.dp, bottom = 2.dp),
-                        color      = Color.White.copy(alpha = 0.92f),
-                        fontSize   = 14.sp,
-                        lineHeight = 21.sp
+                        color      = Color.White.copy(alpha = 0.92f), fontSize = 14.sp, lineHeight = 21.sp
                     )
                 }
             }
 
-            // ── Per-message timestamp ─────────────────────────────────────────────
-            // Shown below every bubble in a small muted label.
-            // Right-aligned for user messages, left-aligned for mascot messages.
             Text(
-                text     = timeLabel,
-                fontSize = 10.sp,
-                color    = Color.White.copy(alpha = 0.4f),
+                text     = timeLabel, fontSize = 10.sp, color = Color.White.copy(alpha = 0.4f),
                 modifier = Modifier.padding(
                     start  = if (isUser) 0.dp else 2.dp,
                     end    = if (isUser) 2.dp else 0.dp,
-                    top    = 3.dp,
-                    bottom = 2.dp
+                    top    = 3.dp, bottom = 2.dp
                 )
             )
 
-            // Song recommendation cards
             if (message.songs.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
                 LazyRow(
@@ -449,36 +437,58 @@ private fun ChatBubble(
     }
 }
 
-// ── Mini song card ────────────────────────────────────────────────────────
+// ── Mini song card — glass/translucent, matches user bubble ───────────────
+// Old: Color(0xFF1A2A24) dark opaque green
+// New: SongCardBg (Color.White @ 12% alpha) — same translucent glass family
+//      as UserBubble so the cards feel part of the same chat design language.
 
 @Composable
 private fun MiniSongCard(song: SongRecommendation, isLoading: Boolean, moodAccent: Color, onClick: () -> Unit) {
     Surface(
-        modifier       = Modifier.width(160.dp).clickable(enabled = !isLoading, onClick = onClick),
-        shape          = RoundedCornerShape(14.dp),
-        color          = Color(0xFF1A2A24),
-        tonalElevation = 4.dp
+        modifier        = Modifier.width(160.dp).clickable(enabled = !isLoading, onClick = onClick),
+        shape           = RoundedCornerShape(14.dp),
+        // ── glass card — translucent white, not dark green ──────────────
+        color           = SongCardBg,
+        tonalElevation  = 0.dp
     ) {
         Column(Modifier.padding(12.dp)) {
+            // Artwork placeholder — gradient uses moodAccent but lighter
             Box(
-                modifier = Modifier.fillMaxWidth().height(80.dp).clip(RoundedCornerShape(10.dp))
-                    .background(Brush.linearGradient(listOf(moodAccent.copy(alpha = 0.4f), Color(0xFF1A1A2E)))),
+                modifier = Modifier
+                    .fillMaxWidth().height(80.dp).clip(RoundedCornerShape(10.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                moodAccent.copy(alpha = 0.30f),
+                                Color.White.copy(alpha = 0.06f)
+                            )
+                        )
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 if (isLoading) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
                 else Text("🎵", fontSize = 28.sp)
             }
             Spacer(Modifier.height(8.dp))
-            Text(song.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(song.title,  fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(song.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (song.reason.isNotBlank()) {
                 Spacer(Modifier.height(4.dp))
-                Text(song.reason, fontSize = 9.sp, color = moodAccent.copy(alpha = 0.8f), maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 12.sp)
+                Text(song.reason, fontSize = 9.sp, color = moodAccent.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 12.sp)
             }
             Spacer(Modifier.height(6.dp))
-            Surface(Modifier.fillMaxWidth().height(28.dp), shape = RoundedCornerShape(14.dp), color = moodAccent) {
+            // Play button — thin outline style to stay light/translucent
+            Surface(
+                modifier = Modifier.fillMaxWidth().height(28.dp),
+                shape    = RoundedCornerShape(14.dp),
+                // translucent moodAccent — not fully opaque so it stays in family
+                color    = moodAccent.copy(alpha = 0.65f)
+            ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(if (isLoading) "Loading..." else "▶  Play", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                    Text(
+                        if (isLoading) "Loading..." else "▶  Play",
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.White
+                    )
                 }
             }
         }
@@ -500,10 +510,10 @@ private fun BuddyTypingIndicator(typingState: TypingState, petState: PetState) {
             PixelPet(
                 petState  = petState,
                 animation = when (typingState) {
-                    TypingState.Thinking          -> PetAnimation.FOCUSED_STARE
-                    TypingState.FindingSongs       -> PetAnimation.LISTENING
-                    TypingState.FilteringResponse  -> PetAnimation.DANCING
-                    else                          -> PetAnimation.IDLE
+                    TypingState.Thinking         -> PetAnimation.FOCUSED_STARE
+                    TypingState.FindingSongs      -> PetAnimation.LISTENING
+                    TypingState.FilteringResponse -> PetAnimation.DANCING
+                    else                         -> PetAnimation.IDLE
                 },
                 modifier = Modifier.size(34.dp)
             )
@@ -517,7 +527,10 @@ private fun BuddyTypingIndicator(typingState: TypingState, petState: PetState) {
                 val d1 by inf.animateFloat(0.4f, 1f, infiniteRepeatable(tween(400), RepeatMode.Reverse), label = "d1")
                 val d2 by inf.animateFloat(0.4f, 1f, infiniteRepeatable(tween(400, delayMillis = 150), RepeatMode.Reverse), label = "d2")
                 val d3 by inf.animateFloat(0.4f, 1f, infiniteRepeatable(tween(400, delayMillis = 300), RepeatMode.Reverse), label = "d3")
-                listOf(d1, d2, d3).forEach { a -> Box(Modifier.size(8.dp).clip(CircleShape).background(AccentGreen.copy(alpha = a))); Spacer(Modifier.width(4.dp)) }
+                listOf(d1, d2, d3).forEach { a ->
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(AccentGreen.copy(alpha = a)))
+                    Spacer(Modifier.width(4.dp))
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(typingState.label, fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
             }
@@ -525,7 +538,7 @@ private fun BuddyTypingIndicator(typingState: TypingState, petState: PetState) {
     }
 }
 
-// ── Input bar — one button (mic or send) ─────────────────────────────────
+// ── Input bar ─────────────────────────────────────────────────────────────
 
 @Composable
 private fun ChatInputBar(
@@ -551,7 +564,7 @@ private fun ChatInputBar(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { onSend() }),
                 enabled         = !isLoading,
-                colors = OutlinedTextFieldDefaults.colors(
+                colors          = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor      = moodAccent,
                     unfocusedBorderColor    = Color.White.copy(alpha = 0.15f),
                     focusedTextColor        = Color.White,
@@ -562,15 +575,19 @@ private fun ChatInputBar(
                 )
             )
             Spacer(Modifier.width(8.dp))
-            // Single button: mic when empty, send when typing
             if (text.isBlank()) {
-                IconButton(onClick = onVoiceClick, enabled = !isLoading,
-                    modifier = Modifier.size(44.dp).clip(CircleShape).background(GlassWhite)) {
+                IconButton(
+                    onClick  = onVoiceClick, enabled = !isLoading,
+                    modifier = Modifier.size(44.dp).clip(CircleShape).background(GlassWhite)
+                ) {
                     Icon(Icons.Default.Mic, "Voice", tint = Color.White.copy(alpha = 0.7f))
                 }
             } else {
-                IconButton(onClick = onSend, enabled = !isLoading,
-                    modifier = Modifier.size(44.dp).clip(CircleShape).background(if (!isLoading) moodAccent else GlassWhite)) {
+                IconButton(
+                    onClick  = onSend, enabled = !isLoading,
+                    modifier = Modifier.size(44.dp).clip(CircleShape)
+                        .background(if (!isLoading) moodAccent else GlassWhite)
+                ) {
                     if (isLoading) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
                     else Icon(Icons.Default.Send, "Send", tint = Color.White)
                 }

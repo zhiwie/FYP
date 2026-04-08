@@ -44,6 +44,7 @@ import com.example.fypdraft.model.PetRepository
 import com.example.fypdraft.model.PetState
 import com.example.fypdraft.model.PetThought
 import com.example.fypdraft.model.PetType
+import com.example.fypdraft.ui.theme.AppThemeState
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 
@@ -61,8 +62,42 @@ fun MascotWidget(
     onSendMessage: (String) -> Unit = {},
     isPlayingMusic: Boolean = false,
     personalityProfile: PersonalityProfile = PersonalityProfile(),
+    // ── NEW: theme state for dark/light adaptive colours ──────────────────
+    themeState: AppThemeState = AppThemeState(),
     modifier: Modifier = Modifier
 ) {
+    // ── Theme-aware colours ───────────────────────────────────────────────
+    val isDark = themeState.isDark
+
+    // Card / widget surface tint — slightly translucent in both modes
+    val widgetSurface    = if (isDark) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.28f)
+
+    // Text colours
+    val primaryText      = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val secondaryText    = if (isDark) Color(0xFFBBBBCC) else Color(0xFF444455)
+
+    // Edit icon background
+    val editIconBg       = if (isDark) Color.White.copy(alpha = 0.18f) else Color(0xFF1A1A2E).copy(alpha = 0.15f)
+    val editIconTint     = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+
+    // XP bar track
+    val xpTrack          = if (isDark) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.10f)
+    val xpText           = if (isDark) Color(0xFFAAAAAA) else Color(0xFF444455)
+
+    // Chat button surface
+    val chatBtnBg        = if (isDark) Color.White.copy(alpha = 0.14f) else Color(0xFF1A1A2E).copy(alpha = 0.10f)
+    val chatIconBg       = if (isDark) Color.White.copy(alpha = 0.20f) else Color(0xFF1A1A2E).copy(alpha = 0.15f)
+    val chatIconTint     = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val chatTitleColor   = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val chatSubColor     = if (isDark) Color(0xFFAAAAAA) else Color(0xFF555566)
+    val chatArrowTint    = if (isDark) Color.White.copy(alpha = 0.50f) else Color(0xFF1A1A2E).copy(alpha = 0.40f)
+
+    // "Feeling X" row
+    val feelingTextColor = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val changeBtnBg      = if (isDark) Color.White.copy(alpha = 0.18f) else Color(0xFF1A1A2E).copy(alpha = 0.12f)
+    val changeBtnText    = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+
+    // ── Widget state ──────────────────────────────────────────────────────
     var tapCount         by remember { mutableStateOf(0) }
     var showHearts       by remember { mutableStateOf(false) }
     var currentAnimation by remember(mood.mood) { mutableStateOf(petState.animationForMood()) }
@@ -93,7 +128,7 @@ fun MascotWidget(
             delay(500)
             val newState = brain.update(
                 isMusicPlaying = isPlayingMusic, isUserScrolling = false, isUserTapping = false,
-                boundsWidth = roomSize.width.toFloat(), boundsHeight = roomSize.height.toFloat()
+                boundsWidth    = roomSize.width.toFloat(), boundsHeight = roomSize.height.toFloat()
             )
             aiState = newState; thoughtState = brain.currentThought; customThoughtText = brain.customThoughtEmoji
             currentAnimation = when (newState) {
@@ -141,16 +176,22 @@ fun MascotWidget(
 
     val breathingTransition = rememberInfiniteTransition(label = "breathing")
     val breathScale by breathingTransition.animateFloat(
-        1f, if (aiState == PetAIState.DOZY) 1.06f else 1.03f,
-        infiniteRepeatable(tween(when { isPlayingMusic -> 800; aiState == PetAIState.DOZY -> 3500; else -> 2500 }, easing = EaseInOutSine), RepeatMode.Reverse),
+        1f,
+        if (aiState == PetAIState.DOZY) 1.06f else 1.03f,
+        infiniteRepeatable(
+            tween(when { isPlayingMusic -> 800; aiState == PetAIState.DOZY -> 3500; else -> 2500 }, easing = EaseInOutSine),
+            RepeatMode.Reverse
+        ),
         label = "breathScale"
     )
     val bounceY by breathingTransition.animateFloat(
-        0f, if (isPlayingMusic && aiState == PetAIState.GROOVY) -10f else -2f,
+        0f,
+        if (isPlayingMusic && aiState == PetAIState.GROOVY) -10f else -2f,
         infiniteRepeatable(tween(if (isPlayingMusic) 350 else 3000, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "bounceY"
     )
-    val swayAngle by breathingTransition.animateFloat(-3f, 3f,
+    val swayAngle by breathingTransition.animateFloat(
+        -3f, 3f,
         infiniteRepeatable(tween(if (aiState == PetAIState.CURIOUS) 1200 else 3000, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "sway"
     )
@@ -179,13 +220,14 @@ fun MascotWidget(
 
     if (showCustomize) {
         PetCustomiseSheet(
-            petState    = petState, petRepository = petRepository,
+            petState    = petState,
+            petRepository = petRepository,
             onDismiss   = { showCustomize = false },
             onVisitShop = { showCustomize = false; onEditMascot() }
         )
     }
 
-    // ── UI ────────────────────────────────────────────────────────────────────
+    // ── UI ────────────────────────────────────────────────────────────────
     Card(
         modifier  = modifier.fillMaxWidth(),
         shape     = RoundedCornerShape(24.dp),
@@ -195,22 +237,29 @@ fun MascotWidget(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color.White.copy(alpha = 0.12f), shape = RoundedCornerShape(24.dp))
+                .background(widgetSurface, shape = RoundedCornerShape(24.dp))
                 .padding(16.dp)
         ) {
-            // Edit icon
+            // ── Edit / customise icon ─────────────────────────────────────
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd).size(32.dp).clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.2f)).clickable { showCustomize = true },
+                    .background(editIconBg).clickable { showCustomize = true },
                 contentAlignment = Alignment.Center
-            ) { Icon(Icons.Filled.Edit, "Customise", tint = Color.White, modifier = Modifier.size(16.dp)) }
+            ) {
+                Icon(Icons.Filled.Edit, "Customise", tint = editIconTint, modifier = Modifier.size(16.dp))
+            }
 
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Text("${petState.name} · Lv.${petState.level}", fontSize = 12.sp, color = Color.Black.copy(alpha = 0.7f), fontWeight = FontWeight.SemiBold)
+
+                // Pet name + level
+                Text(
+                    "${petState.name} · Lv.${petState.level}",
+                    fontSize = 12.sp, color = secondaryText, fontWeight = FontWeight.SemiBold
+                )
                 Spacer(Modifier.height(8.dp))
 
-                // Pet room — tap = Talking Tom reaction
+                // Pet room
                 Box(
                     modifier = Modifier
                         .fillMaxWidth().height(150.dp).clip(RoundedCornerShape(16.dp))
@@ -229,7 +278,11 @@ fun MascotWidget(
                             translationY = (petPosY.value * (size.height - petH)) - (size.height - petH) / 2 + bounceY
                             scaleX    = breathScale * crouchScale * tapSquishX
                             scaleY    = breathScale * (if (isCrouching) 1.1f else 1f) * crouchScale * tapSquishY
-                            rotationZ = when (aiState) { PetAIState.CURIOUS, PetAIState.GROOVY -> swayAngle; PetAIState.DOZY -> swayAngle * 0.3f; else -> 0f }
+                            rotationZ = when (aiState) {
+                                PetAIState.CURIOUS, PetAIState.GROOVY -> swayAngle
+                                PetAIState.DOZY -> swayAngle * 0.3f
+                                else -> 0f
+                            }
                         },
                         contentAlignment = Alignment.Center
                     ) {
@@ -242,8 +295,10 @@ fun MascotWidget(
                         if (thoughtState != PetThought.NONE) {
                             val bubbleEmoji = if (thoughtState == PetThought.CUSTOM) customThoughtText else thoughtState.emoji
                             if (bubbleEmoji.isNotEmpty()) {
-                                ThoughtBubbleView(emoji = bubbleEmoji,
-                                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 20.dp, y = (-10).dp))
+                                ThoughtBubbleView(
+                                    emoji    = bubbleEmoji,
+                                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 20.dp, y = (-10).dp)
+                                )
                             }
                         }
                     }
@@ -252,22 +307,30 @@ fun MascotWidget(
                 Spacer(Modifier.height(8.dp))
 
                 // XP bar
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-                    Text("XP", fontSize = 10.sp, color = Color.Black.copy(alpha = 0.6f), fontWeight = FontWeight.Bold)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier          = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                ) {
+                    Text("XP", fontSize = 10.sp, color = xpText, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(6.dp))
-                    Box(Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color.Black.copy(alpha = 0.1f))) {
-                        Box(Modifier.fillMaxHeight().fillMaxWidth(petState.xpProgress).clip(RoundedCornerShape(3.dp)).background(Color(0xFFFFD700)))
+                    Box(
+                        Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(xpTrack)
+                    ) {
+                        Box(
+                            Modifier.fillMaxHeight().fillMaxWidth(petState.xpProgress)
+                                .clip(RoundedCornerShape(3.dp)).background(Color(0xFFFFD700))
+                        )
                     }
                     Spacer(Modifier.width(6.dp))
-                    Text("${petState.xp}/${petState.xpForNextLevel}", fontSize = 10.sp, color = Color.White.copy(alpha = 0.7f))
+                    Text("${petState.xp}/${petState.xpForNextLevel}", fontSize = 10.sp, color = xpText)
                 }
 
                 Spacer(Modifier.height(12.dp))
 
-                // ── TAP TO CHAT BUTTON ────────────────────────────────────────────────────
+                // ── Chat button ───────────────────────────────────────────
                 Surface(
                     shape    = RoundedCornerShape(16.dp),
-                    color    = Color.White.copy(alpha = 0.22f),
+                    color    = chatBtnBg,
                     modifier = Modifier.fillMaxWidth().clickable { onOpenChat(null) }
                 ) {
                     Row(
@@ -275,35 +338,52 @@ fun MascotWidget(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
-                            modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.25f)),
+                            modifier         = Modifier.size(36.dp).clip(CircleShape).background(chatIconBg),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Filled.Chat, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Filled.Chat, contentDescription = null, tint = chatIconTint, modifier = Modifier.size(18.dp))
                         }
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Chat with ${petState.name}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text(
+                                "Chat with ${petState.name}",
+                                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = chatTitleColor
+                            )
                             Text(
                                 text     = chatMessage ?: "Tell me how you're feeling…",
-                                fontSize = 12.sp,
-                                color    = Color.White.copy(alpha = 0.65f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                fontSize = 12.sp, color = chatSubColor,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis
                             )
                         }
-                        // ArrowForwardIos is the correct Material icon for a right-pointing chevron
-                        Icon(Icons.Filled.ArrowForwardIos, contentDescription = null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
+                        Icon(
+                            Icons.Filled.ArrowForwardIos, contentDescription = null,
+                            tint = chatArrowTint, modifier = Modifier.size(14.dp)
+                        )
                     }
                 }
 
                 Spacer(Modifier.height(10.dp))
 
-                // Mood label + change button
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text("Feeling ${mood.mood}", fontSize = 13.sp, color = Color.White.copy(alpha = 0.9f), fontWeight = FontWeight.SemiBold)
+                // ── "Feeling X" + Change button ───────────────────────────
+                Row(
+                    verticalAlignment    = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        "Feeling ${mood.mood}",
+                        fontSize = 13.sp, color = feelingTextColor, fontWeight = FontWeight.SemiBold
+                    )
                     Spacer(Modifier.width(8.dp))
-                    Surface(shape = RoundedCornerShape(12.dp), color = Color.White.copy(alpha = 0.25f), modifier = Modifier.clickable { onChangeMood() }) {
-                        Text("Change", modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                    Surface(
+                        shape    = RoundedCornerShape(12.dp),
+                        color    = changeBtnBg,
+                        modifier = Modifier.clickable { onChangeMood() }
+                    ) {
+                        Text(
+                            "Change",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            fontSize = 11.sp, color = changeBtnText, fontWeight = FontWeight.Medium
+                        )
                     }
                 }
             }
@@ -312,7 +392,7 @@ fun MascotWidget(
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// PetCustomiseSheet
+// PetCustomiseSheet — unchanged, uses MaterialTheme tokens (already adaptive)
 // ══════════════════════════════════════════════════════════════════════════
 
 @Composable
@@ -325,14 +405,15 @@ fun PetCustomiseSheet(
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
-            shape  = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape    = RoundedCornerShape(24.dp),
+            colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             modifier = Modifier.fillMaxWidth().fillMaxHeight(0.85f)
         ) {
             Column(Modifier.fillMaxSize()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
+                    modifier              = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Customise ${petState.name}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     TextButton(onClick = onDismiss) { Text("Done") }
@@ -344,27 +425,41 @@ fun PetCustomiseSheet(
                         }
                     }
                 }
-                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                Column(
+                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)
+                ) {
                     when (selectedTab) {
                         0 -> {
-                            Text("Choose your mascot species", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 16.dp))
+                            Text(
+                                "Choose your mascot species", fontSize = 13.sp,
+                                color    = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 16.dp)
+                            )
                             PetType.values().toList().chunked(2).forEach { row ->
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     row.forEach { type ->
                                         val sel = petState.type == type
                                         Surface(
-                                            shape  = RoundedCornerShape(16.dp),
-                                            color  = if (sel) Color(0xFF6A5ACD).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
-                                            border = if (sel) androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF6A5ACD)) else null,
+                                            shape    = RoundedCornerShape(16.dp),
+                                            color    = if (sel) Color(0xFF6A5ACD).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
+                                            border   = if (sel) androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF6A5ACD)) else null,
                                             modifier = Modifier.weight(1f).clickable { petRepository.changePetType(type) }
                                         ) {
-                                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                modifier            = Modifier.padding(16.dp)
+                                            ) {
                                                 PixelPet(petState = petState.copy(type = type), animation = PetAnimation.IDLE, modifier = Modifier.size(72.dp))
                                                 Spacer(Modifier.height(8.dp))
-                                                Text(type.displayName, fontSize = 13.sp,
+                                                Text(
+                                                    type.displayName, fontSize = 13.sp,
                                                     fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (sel) Color(0xFF6A5ACD) else MaterialTheme.colorScheme.onSurface)
-                                                if (sel) { Spacer(Modifier.height(4.dp)); Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF6A5ACD), modifier = Modifier.size(18.dp)) }
+                                                    color      = if (sel) Color(0xFF6A5ACD) else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (sel) {
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF6A5ACD), modifier = Modifier.size(18.dp))
+                                                }
                                             }
                                         }
                                     }
@@ -373,14 +468,23 @@ fun PetCustomiseSheet(
                                 Spacer(Modifier.height(12.dp))
                             }
                             Spacer(Modifier.height(8.dp)); HorizontalDivider(); Spacer(Modifier.height(12.dp))
-                            OutlinedButton(onClick = onVisitShop, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                                Icon(Icons.Filled.Store, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick   = onVisitShop,
+                                modifier  = Modifier.fillMaxWidth(),
+                                shape     = RoundedCornerShape(14.dp)
+                            ) {
+                                Icon(Icons.Filled.Store, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
                                 Text("Visit Pet Shop", fontWeight = FontWeight.SemiBold)
                             }
                         }
                         1 -> {
                             AccessoryCategory.values().forEach { cat ->
-                                Text(cat.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 6.dp))
+                                Text(
+                                    cat.name.lowercase().replaceFirstChar { it.uppercase() },
+                                    fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(vertical = 6.dp)
+                                )
                                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     items(ALL_ACCESSORIES.filter { it.category == cat }) { acc ->
                                         val unlocked = acc.requiredLevel <= petState.level
@@ -392,15 +496,26 @@ fun PetCustomiseSheet(
                                         }
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
-                                            color = when { equipped -> Color(0xFF6A5ACD).copy(alpha = 0.2f); unlocked -> MaterialTheme.colorScheme.surfaceVariant; else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) },
+                                            color = when {
+                                                equipped  -> Color(0xFF6A5ACD).copy(alpha = 0.2f)
+                                                unlocked  -> MaterialTheme.colorScheme.surfaceVariant
+                                                else      -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                            },
                                             modifier = Modifier.width(76.dp).clickable(enabled = unlocked) {
-                                                if (equipped) petRepository.unequipCategory(acc.category) else petRepository.equipAccessory(acc)
+                                                if (equipped) petRepository.unequipCategory(acc.category)
+                                                else petRepository.equipAccessory(acc)
                                             }
                                         ) {
-                                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(8.dp)) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                modifier            = Modifier.padding(8.dp)
+                                            ) {
                                                 Text(acc.emoji, fontSize = 26.sp)
                                                 Text(acc.name, fontSize = 9.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 1)
-                                                when { !unlocked -> Text("Lv.${acc.requiredLevel}", fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); equipped -> Text("Equipped", fontSize = 8.sp, color = Color(0xFF6A5ACD)) }
+                                                when {
+                                                    !unlocked -> Text("Lv.${acc.requiredLevel}", fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    equipped  -> Text("Equipped", fontSize = 8.sp, color = Color(0xFF6A5ACD))
+                                                }
                                             }
                                         }
                                     }
@@ -409,15 +524,26 @@ fun PetCustomiseSheet(
                             }
                         }
                         2 -> {
-                            OutlinedTextField(value = nameInput, onValueChange = { if (it.length <= 12) nameInput = it },
-                                label = { Text("Pet name (max 12 chars)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(
+                                value         = nameInput,
+                                onValueChange = { if (it.length <= 12) nameInput = it },
+                                label         = { Text("Pet name (max 12 chars)") },
+                                singleLine    = true, modifier = Modifier.fillMaxWidth()
+                            )
                             Spacer(Modifier.height(8.dp))
-                            Button(onClick = { petRepository.renamePet(nameInput) }, modifier = Modifier.fillMaxWidth(),
-                                enabled = nameInput.isNotBlank() && nameInput != petState.name) { Text("Save Name") }
+                            Button(
+                                onClick  = { petRepository.renamePet(nameInput) },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled  = nameInput.isNotBlank() && nameInput != petState.name
+                            ) { Text("Save Name") }
                             Spacer(Modifier.height(20.dp))
-                            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth()) {
+                            Card(
+                                colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
                                 Column(Modifier.padding(14.dp)) {
-                                    Text("Pet Stats", fontWeight = FontWeight.Bold, fontSize = 13.sp); Spacer(Modifier.height(6.dp))
+                                    Text("Pet Stats", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Spacer(Modifier.height(6.dp))
                                     Text("Level: ${petState.level}", fontSize = 12.sp)
                                     Text("XP: ${petState.xp}/${petState.xpForNextLevel}", fontSize = 12.sp)
                                     Text("Songs played: ${petState.totalSongsPlayed}", fontSize = 12.sp)
@@ -441,9 +567,12 @@ fun PetCustomizeDialogView(petState: PetState, petRepository: PetRepository, onD
 private fun ThoughtBubbleView(emoji: String, modifier: Modifier = Modifier) {
     val alpha  by rememberInfiniteTransition(label = "tbPulse").animateFloat(0.7f, 1f, infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "tbAlpha")
     val floatY by rememberInfiniteTransition(label = "tbFloat").animateFloat(0f, -4f, infiniteRepeatable(tween(1200, easing = EaseInOutSine), RepeatMode.Reverse), label = "tbFloatY")
-    Box(modifier = modifier.graphicsLayer { this.alpha = alpha; translationY = floatY }.background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(12.dp)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-        Text(emoji, fontSize = 16.sp)
-    }
+    Box(
+        modifier = modifier
+            .graphicsLayer { this.alpha = alpha; translationY = floatY }
+            .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) { Text(emoji, fontSize = 16.sp) }
 }
 
 @Composable
