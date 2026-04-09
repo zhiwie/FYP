@@ -26,7 +26,6 @@ import com.example.fypdraft.data.repository.SpotifyMusicRepository
 import com.example.fypdraft.data.repository.SpotifyPlaylistInfo
 import com.example.fypdraft.data.repository.SpotifyRepository
 import com.example.fypdraft.model.SongRecommendation
-import com.example.fypdraft.model.Track
 import com.example.fypdraft.ui.theme.AppThemeState
 import com.example.fypdraft.ui.theme.animatedMoodBrushLight
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
@@ -44,12 +43,12 @@ fun LibraryScreen(
     onNavigateToHome: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
+    onNavigateToSpotify: () -> Unit = {},           // <- NEW parameter
     onBack: () -> Unit = {},
     currentTab: Int = 3
 ) {
     val isDark = themeState.isDark
 
-    // ── Theme-aware colors ────────────────────────────────────────────────
     val primaryText   = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
     val secondaryText = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
     val iconTint      = if (isDark) Color(0xFF9E9EBB) else Color(0xFF666677)
@@ -128,7 +127,6 @@ fun LibraryScreen(
                 contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // ── Quick access ───────────────────────────────────────
                 item {
                     LibraryItem(
                         icon = Icons.Filled.Favorite, iconBg = Color(0xFFFF6B6B),
@@ -146,21 +144,35 @@ fun LibraryScreen(
                     )
                 }
 
-                // ── Spotify playlists ──────────────────────────────────
                 if (selectedFilter == "Playlists" || selectedFilter == "All") {
                     if (!isSpotifyConnected) {
+                        // Clickable green banner — same style as HomeScreen
                         item {
                             Card(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                colors   = CardDefaults.cardColors(containerColor = Color(0xFF1DB954).copy(alpha = 0.1f)),
-                                shape    = RoundedCornerShape(12.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .clickable { onNavigateToSpotify() },
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1DB954)),
+                                shape  = RoundedCornerShape(16.dp)
                             ) {
                                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("🎵", fontSize = 24.sp); Spacer(Modifier.width(12.dp))
+                                    Text("🎵", fontSize = 24.sp)
+                                    Spacer(Modifier.width(12.dp))
                                     Column(Modifier.weight(1f)) {
-                                        Text("Connect Spotify", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = primaryText)
-                                        Text("See your playlists here", fontSize = 12.sp, color = secondaryText)
+                                        Text(
+                                            "Connect Spotify",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize   = 15.sp,
+                                            color      = Color.White
+                                        )
+                                        Text(
+                                            "Tap to see your playlists here",
+                                            fontSize = 12.sp,
+                                            color    = Color.White.copy(alpha = 0.8f)
+                                        )
                                     }
+                                    Icon(Icons.Filled.ChevronRight, null, tint = Color.White)
                                 }
                             }
                         }
@@ -186,7 +198,6 @@ fun LibraryScreen(
                     }
                 }
 
-                // ── Favorites ──────────────────────────────────────────
                 if (selectedFilter == "Favorites" || selectedFilter == "All") {
                     if (favorites.isNotEmpty()) {
                         item {
@@ -230,8 +241,6 @@ fun LibraryScreen(
     }
 }
 
-// ── Library quick access item ─────────────────────────────────────────────
-
 @Composable
 private fun LibraryItem(
     icon: ImageVector, iconBg: Color, title: String, subtitle: String,
@@ -253,8 +262,6 @@ private fun LibraryItem(
         Icon(Icons.Filled.ChevronRight, null, tint = iconTint, modifier = Modifier.size(20.dp))
     }
 }
-
-// ── Spotify playlist item ─────────────────────────────────────────────────
 
 @Composable
 private fun PlaylistItem(
@@ -292,8 +299,6 @@ private fun PlaylistItem(
         Icon(Icons.Filled.ChevronRight, null, tint = iconTint, modifier = Modifier.size(20.dp))
     }
 }
-
-// ── Favorite song item ────────────────────────────────────────────────────
 
 @Composable
 private fun FavoriteItem(

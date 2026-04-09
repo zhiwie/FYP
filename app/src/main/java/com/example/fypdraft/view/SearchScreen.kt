@@ -51,8 +51,8 @@ private data class MoodCategory(
     val query: String,
     val gradientColors: List<Color>,
     val glowColor: Color,
-    val animEmoji: String = "",          // decorative background emoji/texture hint
-    val contextTag: String = ""          // XAI context hint shown on the card
+    val animEmoji: String = "",
+    val contextTag: String = ""
 )
 
 private data class XAIChip(
@@ -62,7 +62,6 @@ private data class XAIChip(
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-/** Detect emotional keywords in freeform search text and return a mood key. */
 private fun detectMoodFromQuery(query: String): String? {
     val q = query.lowercase()
     return when {
@@ -79,7 +78,6 @@ private fun detectMoodFromQuery(query: String): String? {
     }
 }
 
-/** Translate detected mood into an appropriate Spotify search query. */
 private fun moodToSearchQuery(mood: String): String = when (mood) {
     "anxious"   -> "calming anxiety relief meditation ambient peaceful"
     "sad"       -> "sad emotional ballad comfort heartbreak"
@@ -93,9 +91,8 @@ private fun moodToSearchQuery(mood: String): String = when (mood) {
     else        -> mood
 }
 
-/** Derive a friendly XAI "why" tag for each result position. */
 private fun xaiChipForIndex(index: Int, mood: String, sectionTitle: String = ""): XAIChip? {
-    if (index % 5 != 4) return null          // every 5th item gets a breakout chip
+    if (index % 5 != 4) return null
     return when {
         mood == "energetic" -> XAIChip("Heart rate match detected ⚡", "⚡")
         mood == "focused"   -> XAIChip("You focus best with steady BPM", "🎯")
@@ -107,7 +104,6 @@ private fun xaiChipForIndex(index: Int, mood: String, sectionTitle: String = "")
     }
 }
 
-/** UI accent/glow colour per detected emotional state. */
 private fun moodUiAccent(mood: String?): Color = when (mood) {
     "anxious"   -> Color(0xFF26C6DA)
     "sad"       -> Color(0xFF667EEA)
@@ -121,7 +117,6 @@ private fun moodUiAccent(mood: String?): Color = when (mood) {
     else        -> Color(0xFF9C27B0)
 }
 
-// Rotating placeholder texts for the NLP-aware search bar
 private val SEARCH_PLACEHOLDERS = listOf(
     "How are we feeling today?",
     "What's the vibe right now?",
@@ -141,6 +136,7 @@ fun SearchScreen(
     onNavigateToHome: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
     onNavigateToLibrary: () -> Unit = {},
+    onNavigateToSpotify: () -> Unit = {},           // ← NEW parameter
     onNavigateToEmotionChat: ((String?) -> Unit)? = null,
     onBack: () -> Unit = {},
     currentTab: Int = 1
@@ -151,38 +147,33 @@ fun SearchScreen(
     val searchBg      = if (isDark) Color(0xFF2A2A3E) else Color.White
     val iconTint      = if (isDark) Color(0xFF9E9EBB) else Color(0xFF666677)
 
-    val scope            = rememberCoroutineScope()
+    val scope             = rememberCoroutineScope()
     val searchHistoryRepo = remember { SearchHistoryRepository() }
     val spotifyMusicRepo  = remember(spotifyRepository) {
         spotifyRepository?.let { SpotifyMusicRepository(it) }
     }
     val hasToken = spotifyRepository?.getAccessToken() != null
 
-    // ── State ──────────────────────────────────────────────────────────────
     var searchQuery    by remember { mutableStateOf("") }
     var searchResults  by remember { mutableStateOf<List<Track>>(emptyList()) }
     var isSearching    by remember { mutableStateOf(false) }
     var recentSearches by remember { mutableStateOf<List<String>>(emptyList()) }
     var searchJob      by remember { mutableStateOf<Job?>(null) }
 
-    // NLP mood detection from free-text query
-    val detectedMood   = remember(searchQuery) { detectMoodFromQuery(searchQuery) }
-    val accentColor    = remember(detectedMood, themeState.currentMood) {
+    val detectedMood = remember(searchQuery) { detectMoodFromQuery(searchQuery) }
+    val accentColor  = remember(detectedMood, themeState.currentMood) {
         moodUiAccent(detectedMood ?: themeState.currentMood.takeIf { it != "neutral" })
     }
 
-    // Rotating placeholder text
     var placeholderIdx by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) { delay(3500); placeholderIdx = (placeholderIdx + 1) % SEARCH_PLACEHOLDERS.size }
     }
 
-    // Mascot portal visibility — show when query looks emotional
     val showMascotPortal = remember(searchQuery) {
         searchQuery.length >= 4 && detectedMood != null
     }
 
-    // ── Mood categories (redesigned) ──────────────────────────────────────
     val categories = remember {
         listOf(
             MoodCategory("Happy",     "😊", "happy uplifting feel good hits",
@@ -212,9 +203,8 @@ fun SearchScreen(
         )
     }
 
-    // ── Recent vibes tracks (top row) ─────────────────────────────────────
-    var recentVibes   by remember { mutableStateOf<List<Track>>(emptyList()) }
-    var vibesLoading  by remember { mutableStateOf(false) }
+    var recentVibes  by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var vibesLoading by remember { mutableStateOf(false) }
     LaunchedEffect(hasToken) {
         if (!hasToken || spotifyMusicRepo == null) return@LaunchedEffect
         vibesLoading = true
@@ -226,7 +216,6 @@ fun SearchScreen(
         vibesLoading = false
     }
 
-    // ── Debounced Spotify search ──────────────────────────────────────────
     LaunchedEffect(searchQuery) {
         searchJob?.cancel()
         if (searchQuery.length < 2 || spotifyMusicRepo == null) {
@@ -234,8 +223,7 @@ fun SearchScreen(
         }
         searchJob = scope.launch {
             isSearching = true; delay(400)
-            val effectiveQuery = if (detectedMood != null) moodToSearchQuery(detectedMood)
-            else searchQuery
+            val effectiveQuery = if (detectedMood != null) moodToSearchQuery(detectedMood) else searchQuery
             Log.d("SearchScreen", "Searching: '$effectiveQuery' (detected mood: $detectedMood)")
             searchResults = spotifyMusicRepo.searchTracks(effectiveQuery, 20)
             isSearching = false
@@ -271,18 +259,18 @@ fun SearchScreen(
                 // ══════════ SEARCH BAR ════════════════════════════════════
                 item {
                     SearchBarSection(
-                        query            = searchQuery,
-                        onQueryChange    = { searchQuery = it },
-                        onClear          = { searchQuery = ""; searchResults = emptyList() },
-                        isSearching      = isSearching,
-                        detectedMood     = detectedMood,
-                        accentColor      = accentColor,
-                        placeholder      = SEARCH_PLACEHOLDERS[placeholderIdx],
-                        isDark           = isDark,
-                        primaryText      = primaryText,
-                        secondaryText    = secondaryText,
-                        searchBg         = searchBg,
-                        iconTint         = iconTint
+                        query         = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        onClear       = { searchQuery = ""; searchResults = emptyList() },
+                        isSearching   = isSearching,
+                        detectedMood  = detectedMood,
+                        accentColor   = accentColor,
+                        placeholder   = SEARCH_PLACEHOLDERS[placeholderIdx],
+                        isDark        = isDark,
+                        primaryText   = primaryText,
+                        secondaryText = secondaryText,
+                        searchBg      = searchBg,
+                        iconTint      = iconTint
                     )
                 }
 
@@ -294,23 +282,23 @@ fun SearchScreen(
                         exit    = fadeOut() + shrinkVertically()
                     ) {
                         MascotPortalBanner(
-                            mood              = detectedMood ?: "",
-                            accentColor       = accentColor,
-                            isDark            = isDark,
-                            onOpenChat        = { onNavigateToEmotionChat?.invoke(searchQuery) }
+                            mood        = detectedMood ?: "",
+                            accentColor = accentColor,
+                            isDark      = isDark,
+                            onOpenChat  = { onNavigateToEmotionChat?.invoke(searchQuery) }
                         )
                     }
                 }
 
-                // ══════════ NO TOKEN STATE ════════════════════════════════
+                // ══════════ NO TOKEN — CLICKABLE CONNECT BANNER ═══════════
                 if (!hasToken) {
                     item {
-                        NoTokenState(secondaryText)
+                        SpotifyConnectBanner(onConnect = onNavigateToSpotify)
                     }
                     return@LazyColumn
                 }
 
-                // ══════════ SEARCH RESULTS (infinite feed) ════════════════
+                // ══════════ SEARCH RESULTS ════════════════════════════════
                 if (searchResults.isNotEmpty()) {
 
                     item {
@@ -322,31 +310,26 @@ fun SearchScreen(
                             Text(
                                 if (detectedMood != null) "Mood results for \"${detectedMood}\""
                                 else "${searchResults.size} results",
-                                fontSize   = 13.sp, color = secondaryText
+                                fontSize = 13.sp, color = secondaryText
                             )
-                            if (detectedMood != null) {
-                                MoodDetectedPill(detectedMood, accentColor)
-                            }
+                            if (detectedMood != null) MoodDetectedPill(detectedMood, accentColor)
                         }
                     }
 
                     itemsIndexed(searchResults) { index, track ->
-                        // Every 5th item: show XAI breakout card
                         val chip = xaiChipForIndex(index, detectedMood ?: themeState.currentMood)
-                        if (chip != null) {
-                            XAIBreakoutCard(chip, accentColor, isDark)
-                        }
+                        if (chip != null) XAIBreakoutCard(chip, accentColor, isDark)
                         SearchResultItem(
-                            track          = track,
-                            index          = index,
-                            isDark         = isDark,
-                            primaryText    = primaryText,
-                            secondaryText  = secondaryText,
-                            iconTint       = iconTint,
-                            detectedMood   = detectedMood ?: themeState.currentMood,
-                            accentColor    = accentColor,
-                            onSendToChat   = { onNavigateToEmotionChat?.invoke("More like \"${track.name}\" but ${detectedMood ?: "different"}") },
-                            onClick        = {
+                            track         = track,
+                            index         = index,
+                            isDark        = isDark,
+                            primaryText   = primaryText,
+                            secondaryText = secondaryText,
+                            iconTint      = iconTint,
+                            detectedMood  = detectedMood ?: themeState.currentMood,
+                            accentColor   = accentColor,
+                            onSendToChat  = { onNavigateToEmotionChat?.invoke("More like \"${track.name}\" but ${detectedMood ?: "different"}") },
+                            onClick       = {
                                 musicPlayerViewModel?.loadTrack(track, searchResults)
                                 onNavigateToMusicPlayer()
                             }
@@ -357,10 +340,7 @@ fun SearchScreen(
                 } else if (searchQuery.length >= 2 && !isSearching) {
 
                     item {
-                        Box(
-                            Modifier.fillMaxWidth().padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
+                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                             Text("No results for \"$searchQuery\"", color = secondaryText, fontSize = 14.sp)
                         }
                     }
@@ -368,19 +348,18 @@ fun SearchScreen(
                 } else {
                     // ════════ DEFAULT BROWSE STATE ═══════════════════════
 
-                    // ─── ROW 1: Your Recent Vibes ─────────────────────────
                     if (recentVibes.isNotEmpty() || vibesLoading) {
                         item {
                             SectionHeader(
-                                title       = "Your Recent Vibes",
-                                subtitle    = "Played while you were ${themeState.currentMood.replaceFirstChar { it.uppercaseChar() }}",
-                                primaryText = primaryText,
+                                title         = "Your Recent Vibes",
+                                subtitle      = "Played while you were ${themeState.currentMood.replaceFirstChar { it.uppercaseChar() }}",
+                                primaryText   = primaryText,
                                 secondaryText = secondaryText
                             )
                         }
                         item {
                             LazyRow(
-                                contentPadding      = PaddingValues(horizontal = 20.dp),
+                                contentPadding        = PaddingValues(horizontal = 20.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 if (vibesLoading) {
@@ -404,7 +383,6 @@ fun SearchScreen(
                         item { Spacer(Modifier.height(28.dp)) }
                     }
 
-                    // ─── ROW 2: Explore Moods (glassmorphic cards) ────────
                     item {
                         SectionHeader(
                             title         = "Explore Moods",
@@ -420,16 +398,15 @@ fun SearchScreen(
                         ) {
                             items(categories) { cat ->
                                 GlassmorphicMoodCard(
-                                    category   = cat,
-                                    isDark     = isDark,
-                                    onClick    = { searchQuery = cat.query }
+                                    category = cat,
+                                    isDark   = isDark,
+                                    onClick  = { searchQuery = cat.query }
                                 )
                             }
                         }
                     }
                     item { Spacer(Modifier.height(28.dp)) }
 
-                    // ─── Recent Searches ──────────────────────────────────
                     if (recentSearches.isNotEmpty()) {
                         item {
                             SectionHeader(
@@ -452,6 +429,43 @@ fun SearchScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+// ── Spotify Connect Banner ────────────────────────────────────────────────────
+// Matches the style of HomeScreen's Spotify banner — same green card, same layout.
+
+@Composable
+private fun SpotifyConnectBanner(onConnect: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .clickable { onConnect() },
+        shape  = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1DB954))
+    ) {
+        Row(
+            Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("🎵", fontSize = 24.sp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Connect Spotify",
+                    color      = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize   = 15.sp
+                )
+                Text(
+                    "Tap to search millions of songs",
+                    color    = Color.White.copy(alpha = 0.8f),
+                    fontSize = 12.sp
+                )
+            }
+            Icon(Icons.Filled.ChevronRight, null, tint = Color.White)
         }
     }
 }
@@ -502,11 +516,9 @@ private fun SearchBarSection(
                 modifier      = Modifier.fillMaxWidth(),
                 placeholder   = {
                     AnimatedContent(
-                        targetState = placeholder,
-                        transitionSpec = {
-                            fadeIn(tween(400)) togetherWith fadeOut(tween(400))
-                        },
-                        label = "placeholder"
+                        targetState  = placeholder,
+                        transitionSpec = { fadeIn(tween(400)) togetherWith fadeOut(tween(400)) },
+                        label        = "placeholder"
                     ) { text ->
                         Text(text, color = secondaryText, fontSize = 14.sp)
                     }
@@ -521,9 +533,7 @@ private fun SearchBarSection(
                 trailingIcon = {
                     when {
                         isSearching -> CircularProgressIndicator(
-                            Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color       = accentColor
+                            Modifier.size(20.dp), strokeWidth = 2.dp, color = accentColor
                         )
                         query.isNotEmpty() -> IconButton(onClick = onClear) {
                             Icon(Icons.Filled.Close, "Clear", tint = iconTint)
@@ -543,19 +553,18 @@ private fun SearchBarSection(
             )
         }
 
-        // Mood detected indicator below bar
         AnimatedVisibility(visible = detectedMood != null) {
             Row(
                 Modifier.padding(start = 16.dp, top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Box(
-                    Modifier.size(6.dp).clip(CircleShape).background(accentColor)
-                )
+                Box(Modifier.size(6.dp).clip(CircleShape).background(accentColor))
                 Text(
                     "Mood detected: ${detectedMood?.replaceFirstChar { it.uppercaseChar() }} • Personalising results",
-                    fontSize = 11.sp, color = accentColor, fontWeight = FontWeight.Medium
+                    fontSize   = 11.sp,
+                    color      = accentColor,
+                    fontWeight = FontWeight.Medium
                 )
             }
         }
@@ -572,14 +581,13 @@ private fun MascotPortalBanner(
     onOpenChat: () -> Unit
 ) {
     val bgColor = if (isDark) accentColor.copy(alpha = 0.15f) else accentColor.copy(alpha = 0.10f)
-    val moodLabel = mood.replaceFirstChar { it.uppercaseChar() }
     val message = when (mood) {
-        "anxious"   -> "That sounds heavy. Want to talk it through? 💬"
-        "sad"       -> "I'm here for you. Let's chat about it 🌧️"
-        "angry"     -> "Need to vent? I'm listening 🔥"
-        "focused"   -> "I'll find the perfect focus playlist for you 🎯"
-        "romantic"  -> "Setting the mood? Let me help 💕"
-        else        -> "I can find something perfect for this vibe 🎵"
+        "anxious"  -> "That sounds heavy. Want to talk it through? 💬"
+        "sad"      -> "I'm here for you. Let's chat about it 🌧️"
+        "angry"    -> "Need to vent? I'm listening 🔥"
+        "focused"  -> "I'll find the perfect focus playlist for you 🎯"
+        "romantic" -> "Setting the mood? Let me help 💕"
+        else       -> "I can find something perfect for this vibe 🎵"
     }
 
     Surface(
@@ -587,14 +595,13 @@ private fun MascotPortalBanner(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .clickable { onOpenChat() },
-        shape  = RoundedCornerShape(16.dp),
-        color  = bgColor
+        shape = RoundedCornerShape(16.dp),
+        color = bgColor
     ) {
         Row(
             Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Pulsing mascot icon
             val pulse by rememberInfiniteTransition(label = "portalPulse").animateFloat(
                 0.85f, 1.0f,
                 infiniteRepeatable(tween(900, easing = EaseInOutSine), RepeatMode.Reverse),
@@ -608,21 +615,15 @@ private fun MascotPortalBanner(
 
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    message, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    color = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
-                )
-                Text(
-                    "Tap to open chat →",
-                    fontSize = 11.sp,
-                    color    = accentColor
-                )
+                Text(message, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    color = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E))
+                Text("Tap to open chat →", fontSize = 11.sp, color = accentColor)
             }
         }
     }
 }
 
-// ── Glassmorphic Mood Card (Row 2) ─────────────────────────────────────────────
+// ── Glassmorphic Mood Card ─────────────────────────────────────────────────────
 
 @Composable
 private fun GlassmorphicMoodCard(
@@ -642,66 +643,28 @@ private fun GlassmorphicMoodCard(
             .height(140.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(20.dp))
-            .clickable {
-                pressed = true
-                onClick()
-            }
+            .clickable { pressed = true; onClick() }
     ) {
-        // Gradient background
-        Box(
-            Modifier.fillMaxSize()
-                .background(Brush.linearGradient(category.gradientColors))
-        )
-
-        // Decorative large emoji background (subtle)
+        Box(Modifier.fillMaxSize().background(Brush.linearGradient(category.gradientColors)))
         Text(
             category.animEmoji.ifEmpty { category.emoji },
             fontSize = 72.sp,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .offset(x = 12.dp, y = 12.dp)
-                .graphicsLayer { alpha = 0.18f }
+            modifier = Modifier.align(Alignment.BottomEnd).offset(x = 12.dp, y = 12.dp).graphicsLayer { alpha = 0.18f }
         )
-
-        // Glass overlay
+        Box(Modifier.fillMaxSize().background(
+            if (isDark) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.12f)
+        ))
         Box(
-            Modifier.fillMaxSize()
-                .background(
-                    if (isDark) Color.Black.copy(alpha = 0.15f)
-                    else Color.White.copy(alpha = 0.12f)
-                )
+            Modifier.size(40.dp).align(Alignment.TopEnd).offset(x = 12.dp, y = (-12).dp)
+                .clip(CircleShape).blur(16.dp).background(category.glowColor.copy(alpha = 0.8f))
         )
-
-        // Glow dot top-right
-        Box(
-            Modifier.size(40.dp)
-                .align(Alignment.TopEnd)
-                .offset(x = 12.dp, y = (-12).dp)
-                .clip(CircleShape)
-                .blur(16.dp)
-                .background(category.glowColor.copy(alpha = 0.8f))
-        )
-
-        // Content
-        Column(
-            Modifier.fillMaxSize().padding(14.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
+        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
             Text(category.emoji, fontSize = 28.sp)
-
             Column {
-                Text(
-                    category.label,
-                    color      = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize   = 16.sp
-                )
+                Text(category.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 if (category.contextTag.isNotEmpty()) {
                     Spacer(Modifier.height(3.dp))
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color.Black.copy(alpha = 0.25f)
-                    ) {
+                    Surface(shape = RoundedCornerShape(6.dp), color = Color.Black.copy(alpha = 0.25f)) {
                         Text(
                             category.contextTag,
                             modifier   = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -718,7 +681,7 @@ private fun GlassmorphicMoodCard(
     }
 }
 
-// ── Vibe Card (Row 1 - album art with glow) ────────────────────────────────────
+// ── Vibe Card ─────────────────────────────────────────────────────────────────
 
 @Composable
 private fun VibeCard(
@@ -733,79 +696,38 @@ private fun VibeCard(
         Modifier.width(120.dp).clickable { onClick() },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            Modifier.size(120.dp)
-                .drawBehind {
-                    // glow halo
-                    drawCircle(
-                        color  = accentColor.copy(alpha = 0.30f),
-                        radius = size.width * 0.55f
-                    )
-                }
-        ) {
-            Card(
-                Modifier.fillMaxSize(),
-                shape     = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(6.dp)
-            ) {
+        Box(Modifier.size(120.dp).drawBehind {
+            drawCircle(color = accentColor.copy(alpha = 0.30f), radius = size.width * 0.55f)
+        }) {
+            Card(Modifier.fillMaxSize(), shape = RoundedCornerShape(16.dp), elevation = CardDefaults.cardElevation(6.dp)) {
                 if (track.albumArtUrl.isNotEmpty()) {
-                    AsyncImage(
-                        model           = track.albumArtUrl,
-                        contentDescription = null,
-                        contentScale    = ContentScale.Crop,
-                        modifier        = Modifier.fillMaxSize()
-                    )
+                    AsyncImage(model = track.albumArtUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 } else {
-                    Box(
-                        Modifier.fillMaxSize().background(cardBg),
-                        contentAlignment = Alignment.Center
-                    ) { Text("🎵", fontSize = 28.sp) }
+                    Box(Modifier.fillMaxSize().background(cardBg), contentAlignment = Alignment.Center) { Text("🎵", fontSize = 28.sp) }
                 }
             }
-            // XAI chip bottom-left
-            Surface(
-                Modifier.align(Alignment.BottomStart).padding(6.dp),
-                shape = RoundedCornerShape(8.dp),
-                color = Color.Black.copy(alpha = 0.55f)
-            ) {
+            Surface(Modifier.align(Alignment.BottomStart).padding(6.dp), shape = RoundedCornerShape(8.dp), color = Color.Black.copy(alpha = 0.55f)) {
                 Text(
                     "Played while ${moodKey.replaceFirstChar { it.uppercaseChar() }}",
-                    modifier   = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                    fontSize   = 8.sp,
-                    color      = Color.White,
-                    maxLines   = 1,
-                    overflow   = TextOverflow.Ellipsis
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                    fontSize = 8.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text(
-            track.name,
-            fontSize   = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color      = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E),
-            maxLines   = 1,
-            overflow   = TextOverflow.Ellipsis
-        )
-        Text(
-            track.artist,
-            fontSize = 10.sp,
-            color    = if (isDark) Color(0xFF888899) else Color(0xFF666677),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        Text(track.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            color = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(track.artist, fontSize = 10.sp,
+            color = if (isDark) Color(0xFF888899) else Color(0xFF666677), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
 private fun VibeCardSkeleton(isDark: Boolean) {
     val shimmerAlpha by rememberInfiniteTransition(label = "shimmer").animateFloat(
-        0.3f, 0.7f,
-        infiniteRepeatable(tween(900), RepeatMode.Reverse),
-        label = "shimmerAlpha"
+        0.3f, 0.7f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "shimmerAlpha"
     )
-    val bg = if (isDark) Color(0xFF2A2A3E).copy(alpha = shimmerAlpha)
-    else Color(0xFFDDDDEE).copy(alpha = shimmerAlpha)
+    val bg = if (isDark) Color(0xFF2A2A3E).copy(alpha = shimmerAlpha) else Color(0xFFDDDDEE).copy(alpha = shimmerAlpha)
     Column(Modifier.width(120.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(120.dp).clip(RoundedCornerShape(16.dp)).background(bg))
         Spacer(Modifier.height(8.dp))
@@ -815,7 +737,7 @@ private fun VibeCardSkeleton(isDark: Boolean) {
     }
 }
 
-// ── Search Result Item (with sparkline energy bar + XAI context chip) ─────────
+// ── Search Result Item ────────────────────────────────────────────────────────
 
 @Composable
 private fun SearchResultItem(
@@ -830,7 +752,6 @@ private fun SearchResultItem(
     onSendToChat: () -> Unit,
     onClick: () -> Unit
 ) {
-    // Derive a pseudo energy level from track metadata (no audio analysis needed)
     val energyLevel = remember(track.id) {
         val hash = track.id.hashCode().let { if (it < 0) -it else it }
         (hash % 100) / 100f
@@ -845,108 +766,50 @@ private fun SearchResultItem(
         energyLevel > 0.4f -> "Mid energy"
         else               -> "Chill"
     }
-
-    // Contextual XAI chip for this specific track
     val contextChip = remember(track.id, detectedMood) {
         val chips = when (detectedMood) {
-            "calm", "tired"     -> listOf("Steady BPM", "Instrumental", "Low tempo", "Calming")
-            "energetic", "angry"-> listOf("High BPM", "Bass-heavy", "Dynamic", "Intense")
-            "sad"               -> listOf("Emotional lyrics", "Slow tempo", "Melancholic", "Comforting")
-            "focused"           -> listOf("No vocals", "Steady beat", "Minimal", "Consistent")
-            "happy"             -> listOf("Upbeat", "Major key", "Bright tone", "Feel-good")
-            else                -> listOf("Mood match", "Vibe match", "Similar energy", "Related")
+            "calm", "tired"      -> listOf("Steady BPM", "Instrumental", "Low tempo", "Calming")
+            "energetic", "angry" -> listOf("High BPM", "Bass-heavy", "Dynamic", "Intense")
+            "sad"                -> listOf("Emotional lyrics", "Slow tempo", "Melancholic", "Comforting")
+            "focused"            -> listOf("No vocals", "Steady beat", "Minimal", "Consistent")
+            "happy"              -> listOf("Upbeat", "Major key", "Bright tone", "Feel-good")
+            else                 -> listOf("Mood match", "Vibe match", "Similar energy", "Related")
         }
         chips[(track.id.hashCode().let { if (it < 0) -it else it }) % chips.size]
     }
-
     val rowBg = if (isDark) Color.White.copy(alpha = 0.04f) else Color.White.copy(alpha = 0.45f)
 
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 3.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = rowBg
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+        shape    = RoundedCornerShape(14.dp),
+        color    = rowBg
     ) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { onClick() }
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Album art
             Card(Modifier.size(52.dp), shape = RoundedCornerShape(10.dp)) {
                 if (track.albumArtUrl.isNotEmpty()) {
-                    AsyncImage(
-                        model           = track.albumArtUrl,
-                        contentDescription = null,
-                        contentScale    = ContentScale.Crop,
-                        modifier        = Modifier.fillMaxSize()
-                    )
+                    AsyncImage(model = track.albumArtUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 } else {
-                    Box(
-                        Modifier.fillMaxSize().background(if (isDark) Color(0xFF2A2A3E) else Color(0xFFEEEEF5)),
-                        contentAlignment = Alignment.Center
-                    ) { Text("🎵", fontSize = 20.sp) }
+                    Box(Modifier.fillMaxSize().background(if (isDark) Color(0xFF2A2A3E) else Color(0xFFEEEEF5)), contentAlignment = Alignment.Center) { Text("🎵", fontSize = 20.sp) }
                 }
             }
-
             Spacer(Modifier.width(12.dp))
-
-            // Text + chips
             Column(Modifier.weight(1f)) {
-                Text(
-                    track.name,
-                    fontSize   = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color      = primaryText,
-                    maxLines   = 1,
-                    overflow   = TextOverflow.Ellipsis
-                )
-                Text(
-                    "${track.artist} · ${track.album}",
-                    fontSize = 12.sp,
-                    color    = secondaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(track.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${track.artist} · ${track.album}", fontSize = 12.sp, color = secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(5.dp))
-
-                // Sparkline energy bar + chips row
-                Row(
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Mini waveform sparkline
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     SparklineBar(energyLevel, energyColor)
-
-                    // Energy label
                     SmallChip(energyLabel, energyColor.copy(alpha = 0.18f), energyColor)
-
-                    // XAI context chip
                     SmallChip(contextChip, accentColor.copy(alpha = 0.15f), accentColor)
                 }
             }
-
             Spacer(Modifier.width(8.dp))
-
-            // Play + "send to chat" actions
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(
-                    Icons.Filled.PlayArrow, null,
-                    tint     = iconTint,
-                    modifier = Modifier.size(22.dp)
-                )
-                // "More like this but sadder" micro-CTA
-                Icon(
-                    Icons.Filled.Chat, "More like this",
-                    tint     = accentColor.copy(alpha = 0.6f),
-                    modifier = Modifier.size(14.dp).clickable { onSendToChat() }
-                )
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Icon(Icons.Filled.PlayArrow, null, tint = iconTint, modifier = Modifier.size(22.dp))
+                Icon(Icons.Filled.Chat, "More like this", tint = accentColor.copy(alpha = 0.6f), modifier = Modifier.size(14.dp).clickable { onSendToChat() })
             }
         }
     }
@@ -957,32 +820,19 @@ private fun SearchResultItem(
 @Composable
 private fun XAIBreakoutCard(chip: XAIChip, accentColor: Color, isDark: Boolean) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = accentColor.copy(alpha = if (isDark) 0.15f else 0.10f)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        shape    = RoundedCornerShape(12.dp),
+        color    = accentColor.copy(alpha = if (isDark) 0.15f else 0.10f)
     ) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(chip.icon, fontSize = 18.sp)
             Column {
-                Text(
-                    "Why we're showing more of this",
-                    fontSize   = 10.sp,
-                    color      = accentColor,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.5.sp
-                )
-                Text(
-                    chip.text,
-                    fontSize = 12.sp,
-                    color    = if (isDark) Color(0xFFCCCCDD) else Color(0xFF333344),
-                    fontWeight = FontWeight.Medium
-                )
+                Text("Why we're showing more of this", fontSize = 10.sp, color = accentColor, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                Text(chip.text, fontSize = 12.sp, color = if (isDark) Color(0xFFCCCCDD) else Color(0xFF333344), fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -992,45 +842,29 @@ private fun XAIBreakoutCard(chip: XAIChip, accentColor: Color, isDark: Boolean) 
 
 @Composable
 private fun MoodDetectedPill(mood: String, color: Color) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = color.copy(alpha = 0.15f)
-    ) {
+    Surface(shape = RoundedCornerShape(20.dp), color = color.copy(alpha = 0.15f)) {
         Text(
             "🧠 ${mood.replaceFirstChar { it.uppercaseChar() }} mode",
             modifier   = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            fontSize   = 11.sp,
-            color      = color,
-            fontWeight = FontWeight.SemiBold
+            fontSize   = 11.sp, color = color, fontWeight = FontWeight.SemiBold
         )
     }
 }
 
-// ── Sparkline energy bar ──────────────────────────────────────────────────────
+// ── Sparkline ─────────────────────────────────────────────────────────────────
 
 @Composable
 private fun SparklineBar(energy: Float, color: Color) {
     val bars = remember(energy) {
-        // Generate pseudo-waveform from energy level
-        val baseHeight = energy * 0.6f + 0.1f
+        val base = energy * 0.6f + 0.1f
         (0 until 8).map { i ->
-            val variance = ((i * 7 + (energy * 100).toInt()) % 5) / 10f
-            (baseHeight + variance - 0.25f).coerceIn(0.08f, 1f)
+            val v = ((i * 7 + (energy * 100).toInt()) % 5) / 10f
+            (base + v - 0.25f).coerceIn(0.08f, 1f)
         }
     }
-    Row(
-        Modifier.height(14.dp),
-        verticalAlignment     = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(1.dp)
-    ) {
+    Row(Modifier.height(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
         bars.forEach { h ->
-            Box(
-                Modifier
-                    .width(2.dp)
-                    .fillMaxHeight(h)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(color.copy(alpha = 0.85f))
-            )
+            Box(Modifier.width(2.dp).fillMaxHeight(h).clip(RoundedCornerShape(1.dp)).background(color.copy(alpha = 0.85f)))
         }
     }
 }
@@ -1040,13 +874,7 @@ private fun SparklineBar(energy: Float, color: Color) {
 @Composable
 private fun SmallChip(label: String, bgColor: Color, textColor: Color) {
     Surface(shape = RoundedCornerShape(6.dp), color = bgColor) {
-        Text(
-            label,
-            modifier   = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-            fontSize   = 9.sp,
-            color      = textColor,
-            fontWeight = FontWeight.Medium
-        )
+        Text(label, modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp), fontSize = 9.sp, color = textColor, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -1071,9 +899,7 @@ private fun SectionHeader(
             if (subtitle.isNotEmpty()) Text(subtitle, fontSize = 11.sp, color = secondaryText)
         }
         if (actionLabel.isNotEmpty() && onAction != null) {
-            TextButton(onClick = onAction) {
-                Text(actionLabel, color = secondaryText, fontSize = 12.sp)
-            }
+            TextButton(onClick = onAction) { Text(actionLabel, color = secondaryText, fontSize = 12.sp) }
         }
     }
 }
@@ -1083,28 +909,12 @@ private fun SectionHeader(
 @Composable
 private fun RecentSearchRow(query: String, primaryText: Color, iconTint: Color, onClick: () -> Unit) {
     Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(Icons.Filled.History, null, tint = iconTint, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(12.dp))
         Text(query, fontSize = 14.sp, color = primaryText, modifier = Modifier.weight(1f))
         Icon(Icons.Filled.NorthWest, null, tint = iconTint, modifier = Modifier.size(14.dp))
-    }
-}
-
-// ── No Token State ────────────────────────────────────────────────────────────
-
-@Composable
-private fun NoTokenState(secondaryText: Color) {
-    Box(Modifier.fillMaxWidth().padding(64.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("🎵", fontSize = 48.sp)
-            Spacer(Modifier.height(12.dp))
-            Text("Connect Spotify to search music", color = secondaryText, fontSize = 15.sp)
-        }
     }
 }

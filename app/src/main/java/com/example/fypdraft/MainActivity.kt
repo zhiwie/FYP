@@ -284,6 +284,7 @@ fun MoodSyncApp(
                 onNavigateToHome        = { navigateBack() },
                 onNavigateToFriends     = { bottomNav(Screen.FRIENDS) },
                 onNavigateToLibrary     = { bottomNav(Screen.LIBRARY) },
+                onNavigateToSpotify     = { navigateTo(Screen.SPOTIFY) },
                 currentTab              = 1
             )
 
@@ -305,6 +306,7 @@ fun MoodSyncApp(
                 onNavigateToHome        = { navigateBack() },
                 onNavigateToSearch      = { bottomNav(Screen.SEARCH) },
                 onNavigateToFriends     = { bottomNav(Screen.FRIENDS) },
+                onNavigateToSpotify     = { navigateTo(Screen.SPOTIFY) },
                 currentTab              = 3
             )
 
