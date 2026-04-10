@@ -48,12 +48,11 @@ data class FriendChatMessage(
     val isFromMe: Boolean = false
 )
 
-/** A suggested user the current user might know (Options B & C). */
 data class FriendSuggestion(
     val uid: String,
     val displayName: String,
-    val mutualFriendCount: Int = 0,         // Option B
-    val matchedByPhone: Boolean = false      // Option C
+    val mutualFriendCount: Int = 0,
+    val matchedByPhone: Boolean = false
 )
 
 // ── Repository ───────────────────────────────────────────────────────────
@@ -66,15 +65,11 @@ class SocialRepository {
     private fun uid(): String? = auth.currentUser?.uid
     private fun uname(): String = auth.currentUser?.displayName ?: "Someone"
 
-    // ════════════════════════════════════════════════════════════════
-    // OPTION A — Username search (already working)
-    // addFriend() below implements this.  It is called from the dialog.
-    // ════════════════════════════════════════════════════════════════
+    // ── Add friend by username ────────────────────────────────────────
 
     suspend fun addFriend(username: String): Result<String> {
         val me = uid() ?: return Result.failure(Exception("Not logged in"))
         return try {
-            // Option A: query users WHERE username == "..." LIMIT 1
             val q = db.collection("users")
                 .whereEqualTo("username", username.lowercase().trim())
                 .limit(1).get().await()
@@ -89,8 +84,6 @@ class SocialRepository {
                 .collection("friends").whereEqualTo("uid", fuid).get().await()
             if (!existing.isEmpty) return Result.failure(Exception("Already friends"))
 
-            // Write both directions so each user's friend list is self-contained.
-            // Firestore creates users/{uid}/friends/ automatically on first write.
             db.collection("users").document(me).collection("friends")
                 .add(mapOf("uid" to fuid, "addedAt" to Timestamp.now())).await()
             db.collection("users").document(fuid).collection("friends")
@@ -100,31 +93,18 @@ class SocialRepository {
         } catch (e: Exception) { Result.failure(e) }
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // OPTION B — "People you might know" via mutual friends
-    //
-    // Algorithm:
-    //  1. Load my friend UIDs.
-    //  2. For each friend, load their friend UIDs.
-    //  3. Count how many of my friends know each candidate UID.
-    //  4. Remove UIDs already in my list or equal to my own UID.
-    //  5. Return top suggestions sorted by mutual-friend count.
-    //
-    // This is pure Firestore reads — no extra collections, no Cloud Function.
-    // ════════════════════════════════════════════════════════════════
+    // ── Mutual friend suggestions ─────────────────────────────────────
 
     suspend fun getMutualFriendSuggestions(limit: Int = 10): List<FriendSuggestion> {
         val me = uid() ?: return emptyList()
         return try {
-            // Step 1: my friends
             val myFriendUids = db.collection("users").document(me)
                 .collection("friends").get().await()
                 .documents.mapNotNull { it.getString("uid") }.toSet()
 
             if (myFriendUids.isEmpty()) return emptyList()
 
-            // Step 2 & 3: their friends, counted
-            val mutualCount = mutableMapOf<String, Int>()   // candidateUid → count
+            val mutualCount = mutableMapOf<String, Int>()
             for (fuid in myFriendUids) {
                 try {
                     val theirFriends = db.collection("users").document(fuid)
@@ -135,10 +115,9 @@ class SocialRepository {
                             mutualCount[candidate] = (mutualCount[candidate] ?: 0) + 1
                         }
                     }
-                } catch (_: Exception) { /* skip unreachable friend */ }
+                } catch (_: Exception) {}
             }
 
-            // Step 4 & 5: resolve display names, return top results
             mutualCount.entries
                 .sortedByDescending { it.value }
                 .take(limit)
@@ -155,40 +134,14 @@ class SocialRepository {
         }
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // OPTION C — Phone contact matching
-    //
-    // HOW IT WORKS (no Cloud Function needed for basic matching):
-    //
-    // 1. On device: read contacts, normalise numbers, SHA-256 hash each.
-    // 2. Upload the SET of hashes to contactHashes/{myUid}  (a single doc).
-    //    Firestore creates this collection automatically on first write.
-    // 3. To find matches: query users WHERE phoneHash IN [myHashes].
-    //    Firestore IN supports up to 30 values per query; we batch them.
-    //
-    // PRIVACY NOTE: we never upload raw phone numbers — only SHA-256 hashes.
-    // The hash is one-way: a user's number can only be matched if it appears
-    // in the uploader's contact list AND the other user has also stored their
-    // hash in their profile.  Explain this in your FYP write-up.
-    //
-    // REQUIRES: READ_CONTACTS permission declared in AndroidManifest.xml and
-    // granted by the user at runtime before calling these functions.
-    // ════════════════════════════════════════════════════════════════
+    // ── Phone contact matching ────────────────────────────────────────
 
-    /**
-     * Read device contacts, hash each number, upload to Firestore, and
-     * write the user's own hash into their profile so others can match them.
-     *
-     * Call this once after the user grants READ_CONTACTS.
-     * Safe to call again to refresh.
-     */
     suspend fun uploadContactHashes(context: Context): Boolean {
         val me = uid() ?: return false
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
             != PackageManager.PERMISSION_GRANTED) return false
 
         return try {
-            // Read raw phone numbers from device contacts
             val numbers = mutableSetOf<String>()
             val cursor  = context.contentResolver.query(
                 ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
@@ -203,22 +156,14 @@ class SocialRepository {
                 }
             }
 
-            // SHA-256 hash each number
             val hashes = numbers.map { sha256(it) }
-
-            // Store hashes in a dedicated collection (indexed, queryable)
-            // Firestore creates this collection automatically on first write.
             db.collection("contactHashes").document(me)
-                .set(mapOf("hashes" to hashes, "updatedAt" to Timestamp.now()))
-                .await()
+                .set(mapOf("hashes" to hashes, "updatedAt" to Timestamp.now())).await()
 
-            // Also write this user's own phone hash to their profile so others can match them.
-            // We only write if the user granted permission — no silent collection.
             val myNumber = getMyOwnNumber(context)
             if (myNumber != null) {
                 val myHash = sha256(myNumber)
-                db.collection("users").document(me)
-                    .update("phoneHash", myHash).await()
+                db.collection("users").document(me).update("phoneHash", myHash).await()
             }
 
             Log.d(TAG, "Uploaded ${hashes.size} contact hashes")
@@ -229,45 +174,30 @@ class SocialRepository {
         }
     }
 
-    /**
-     * Query Firestore for users whose phoneHash matches any hash in my contacts.
-     * Returns suggestions not already in my friend list.
-     *
-     * Firestore IN queries are limited to 30 values; we batch them.
-     */
     suspend fun getPhoneContactSuggestions(): List<FriendSuggestion> {
         val me = uid() ?: return emptyList()
         return try {
-            // Load my uploaded hashes
             val doc = db.collection("contactHashes").document(me).get().await()
             @Suppress("UNCHECKED_CAST")
             val hashes = (doc.get("hashes") as? List<String>) ?: return emptyList()
             if (hashes.isEmpty()) return emptyList()
 
-            // My current friend UIDs (to exclude)
             val myFriendUids = db.collection("users").document(me)
                 .collection("friends").get().await()
                 .documents.mapNotNull { it.getString("uid") }.toSet()
 
-            // Batch queries: Firestore IN supports max 30 values
             val suggestions = mutableListOf<FriendSuggestion>()
             hashes.chunked(30).forEach { batch ->
                 try {
-                    val snap = db.collection("users")
-                        .whereIn("phoneHash", batch)
-                        .get().await()
+                    val snap = db.collection("users").whereIn("phoneHash", batch).get().await()
                     snap.documents.forEach { d ->
                         val candidateUid = d.id
                         if (candidateUid != me && candidateUid !in myFriendUids) {
                             val name = d.getString("displayName") ?: d.getString("username") ?: return@forEach
-                            suggestions.add(FriendSuggestion(
-                                uid             = candidateUid,
-                                displayName     = name,
-                                matchedByPhone  = true
-                            ))
+                            suggestions.add(FriendSuggestion(uid = candidateUid, displayName = name, matchedByPhone = true))
                         }
                     }
-                } catch (_: Exception) { /* skip failed batch */ }
+                } catch (_: Exception) {}
             }
             suggestions.distinctBy { it.uid }
         } catch (e: Exception) {
@@ -276,24 +206,17 @@ class SocialRepository {
         }
     }
 
-    // ════════════════════════════════════════════════════════════════
-    // Combined suggestions (B + C merged, de-duplicated)
-    // ════════════════════════════════════════════════════════════════
-
     suspend fun getAllSuggestions(context: Context? = null): List<FriendSuggestion> {
         val mutual = getMutualFriendSuggestions()
-
-        val phone = if (context != null &&
+        val phone  = if (context != null &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS)
             == PackageManager.PERMISSION_GRANTED
         ) getPhoneContactSuggestions() else emptyList()
 
-        // Merge: if a UID appears in both, keep the mutual-friend one and set matchedByPhone
         val map = mutableMapOf<String, FriendSuggestion>()
         mutual.forEach { map[it.uid] = it }
         phone.forEach { phoneSug ->
-            map[phoneSug.uid] = (map[phoneSug.uid] ?: phoneSug)
-                .copy(matchedByPhone = true)
+            map[phoneSug.uid] = (map[phoneSug.uid] ?: phoneSug).copy(matchedByPhone = true)
         }
         return map.values
             .sortedWith(compareByDescending<FriendSuggestion> { it.mutualFriendCount }
@@ -301,6 +224,7 @@ class SocialRepository {
     }
 
     // ── Now-playing auto-share ────────────────────────────────────────
+
     suspend fun shareNowPlaying(
         trackTitle: String, trackArtist: String,
         albumArtUrl: String, spotifyUri: String?, mood: String
@@ -308,30 +232,43 @@ class SocialRepository {
         val me = uid() ?: return
         try {
             db.collection("moments").document(me).set(mapOf(
-                "userId" to me, "userName" to uname(),
-                "trackTitle" to trackTitle, "trackArtist" to trackArtist,
-                "albumArtUrl" to albumArtUrl, "spotifyUri" to spotifyUri,
-                "mood" to mood, "moodEmoji" to moodEmoji(mood),
-                "caption" to "", "isVibeCheck" to false,
-                "timestamp" to Timestamp.now(), "reactions" to emptyMap<String, String>()
+                "userId"      to me,
+                "userName"    to uname(),
+                "trackTitle"  to trackTitle,
+                "trackArtist" to trackArtist,
+                "albumArtUrl" to albumArtUrl,
+                "spotifyUri"  to spotifyUri,
+                "mood"        to mood,
+                "moodEmoji"   to moodEmoji(mood),
+                "caption"     to "",
+                "isVibeCheck" to false,
+                "timestamp"   to Timestamp.now(),
+                "reactions"   to emptyMap<String, String>()
             )).await()
         } catch (e: Exception) { Log.e(TAG, "shareNowPlaying", e) }
     }
 
     // ── Manual vibe check ─────────────────────────────────────────────
+
     suspend fun postVibeCheck(
         trackTitle: String, trackArtist: String,
         albumArtUrl: String, spotifyUri: String?,
         mood: String, caption: String
     ) {
-        val me = uid() ?: return
+        val me   = uid() ?: return
         val data = mapOf(
-            "userId" to me, "userName" to uname(),
-            "trackTitle" to trackTitle, "trackArtist" to trackArtist,
-            "albumArtUrl" to albumArtUrl, "spotifyUri" to spotifyUri,
-            "mood" to mood, "moodEmoji" to moodEmoji(mood),
-            "caption" to caption, "isVibeCheck" to true,
-            "timestamp" to Timestamp.now(), "reactions" to emptyMap<String, String>()
+            "userId"      to me,
+            "userName"    to uname(),
+            "trackTitle"  to trackTitle,
+            "trackArtist" to trackArtist,
+            "albumArtUrl" to albumArtUrl,
+            "spotifyUri"  to spotifyUri,
+            "mood"        to mood,
+            "moodEmoji"   to moodEmoji(mood),
+            "caption"     to caption,
+            "isVibeCheck" to true,
+            "timestamp"   to Timestamp.now(),
+            "reactions"   to emptyMap<String, String>()
         )
         try {
             db.collection("moments").document(me).set(data).await()
@@ -355,7 +292,32 @@ class SocialRepository {
         } catch (_: Exception) { null }
     }
 
+    // ── Vibe history (last 24 h for a friend) ─────────────────────────
+
+    suspend fun getVibeHistory(friendUid: String): List<MusicMoment> {
+        val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+        return try {
+            val snap = db.collection("moments")
+                .document(friendUid)
+                .collection("history")
+                .orderBy("timestamp", Query.Direction.DESCENDING)
+                .limit(20)
+                .get()
+                .await()
+
+            snap.documents.mapNotNull { doc ->
+                val data   = doc.data ?: return@mapNotNull null
+                val moment = docToMoment(doc.id, data)
+                if (moment.timestamp >= cutoff) moment else null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getVibeHistory failed", e)
+            emptyList()
+        }
+    }
+
     // ── Friends list with profiles ────────────────────────────────────
+
     suspend fun getFriendsWithProfiles(): List<FriendProfile> {
         val me = uid() ?: return emptyList()
         return try {
@@ -364,23 +326,28 @@ class SocialRepository {
             uids.mapNotNull { fuid ->
                 try {
                     val userDoc = db.collection("users").document(fuid).get().await()
-                    val name = userDoc.getString("displayName")
+                    val name    = userDoc.getString("displayName")
                         ?: userDoc.getString("username") ?: "Unknown"
                     val momentDoc = db.collection("moments").document(fuid).get().await()
-                    val moment = if (momentDoc.exists())
+                    val moment    = if (momentDoc.exists())
                         docToMoment(momentDoc.id, momentDoc.data ?: emptyMap()) else null
                     val lastActive = moment?.timestamp ?: 0L
-                    FriendProfile(fuid, name,
-                        isOnline   = (System.currentTimeMillis() - lastActive) < 15 * 60_000,
-                        lastActive = lastActive,
-                        currentMoment = moment)
+                    FriendProfile(
+                        fuid, name,
+                        isOnline      = (System.currentTimeMillis() - lastActive) < 15 * 60_000,
+                        lastActive    = lastActive,
+                        currentMoment = moment
+                    )
                 } catch (_: Exception) { null }
-            }.sortedWith(compareByDescending<FriendProfile> { it.isOnline }.thenByDescending { it.lastActive })
+            }.sortedWith(
+                compareByDescending<FriendProfile> { it.isOnline }
+                    .thenByDescending { it.lastActive }
+            )
         } catch (e: Exception) { Log.e(TAG, "getFriends", e); emptyList() }
     }
 
-    // ── Per-friend chat ───────────────────────────────────────────────
-    /** Deterministic convo ID: always smaller UID first */
+    // ── Chat ──────────────────────────────────────────────────────────
+
     private fun chatDocId(a: String, b: String): String =
         if (a < b) "${a}_${b}" else "${b}_${a}"
 
@@ -388,13 +355,13 @@ class SocialRepository {
         val me = uid() ?: return
         try {
             val convoId = chatDocId(me, friendUid)
-            // Ensure the conversation doc exists with participants list
-            // (needed for security rules to work on first message)
             db.collection("chats").document(convoId).set(
-                mapOf("participants" to listOf(me, friendUid),
+                mapOf(
+                    "participants"  to listOf(me, friendUid),
                     "lastMessage"   to text,
                     "lastTimestamp" to Timestamp.now(),
-                    "lastSenderId"  to me),
+                    "lastSenderId"  to me
+                ),
                 SetOptions.merge()
             ).await()
             db.collection("chats").document(convoId).collection("messages")
@@ -414,9 +381,9 @@ class SocialRepository {
                     val ts = doc.getTimestamp("timestamp")?.toDate()?.time
                         ?: System.currentTimeMillis()
                     FriendChatMessage(
-                        id        = doc.id,
-                        senderId  = doc.getString("senderId") ?: "",
-                        text      = doc.getString("text") ?: "",
+                        id       = doc.id,
+                        senderId = doc.getString("senderId") ?: "",
+                        text     = doc.getString("text") ?: "",
                         timestamp = ts,
                         isFromMe  = doc.getString("senderId") == me
                     )
@@ -432,7 +399,6 @@ class SocialRepository {
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    /** Best-effort: try to find the SIM's own number. May return null on many devices. */
     private fun getMyOwnNumber(context: Context): String? {
         return try {
             val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
@@ -449,8 +415,9 @@ class SocialRepository {
             else         -> System.currentTimeMillis()
         }
         return MusicMoment(
-            id = id, userId = data["userId"] as? String ?: "",
-            userName = data["userName"] as? String ?: "Someone",
+            id          = id,
+            userId      = data["userId"]      as? String ?: "",
+            userName    = data["userName"]    as? String ?: "Someone",
             trackTitle  = data["trackTitle"]  as? String ?: "",
             trackArtist = data["trackArtist"] as? String ?: "",
             albumArtUrl = data["albumArtUrl"] as? String ?: "",
@@ -465,7 +432,13 @@ class SocialRepository {
     }
 
     private fun moodEmoji(mood: String): String = when (mood) {
-        "happy" -> "😊"; "sad" -> "😢"; "calm" -> "😌"; "energetic" -> "⚡"
-        "tired" -> "😴"; "focused" -> "🎯"; "romantic" -> "💕"; else -> "🎵"
+        "happy"     -> "😊"
+        "sad"       -> "😢"
+        "calm"      -> "😌"
+        "energetic" -> "⚡"
+        "tired"     -> "😴"
+        "focused"   -> "🎯"
+        "romantic"  -> "💕"
+        else        -> "🎵"
     }
 }

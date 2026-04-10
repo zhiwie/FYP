@@ -43,12 +43,11 @@ fun LibraryScreen(
     onNavigateToHome: () -> Unit = {},
     onNavigateToSearch: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
-    onNavigateToSpotify: () -> Unit = {},           // <- NEW parameter
+    onNavigateToSpotify: () -> Unit = {},
     onBack: () -> Unit = {},
     currentTab: Int = 3
 ) {
-    val isDark = themeState.isDark
-
+    val isDark        = themeState.isDark
     val primaryText   = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
     val secondaryText = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
     val iconTint      = if (isDark) Color(0xFF9E9EBB) else Color(0xFF666677)
@@ -56,9 +55,7 @@ fun LibraryScreen(
 
     val scope            = rememberCoroutineScope()
     val favoritesRepo    = remember { FavoritesRepository() }
-    val spotifyMusicRepo = remember(spotifyRepository) {
-        spotifyRepository?.let { SpotifyMusicRepository(it) }
-    }
+    val spotifyMusicRepo = remember(spotifyRepository) { spotifyRepository?.let { SpotifyMusicRepository(it) } }
 
     var favorites        by remember { mutableStateOf<List<Pair<String, SongRecommendation>>>(emptyList()) }
     var playlists        by remember { mutableStateOf<List<SpotifyPlaylistInfo>>(emptyList()) }
@@ -73,9 +70,7 @@ fun LibraryScreen(
     } ?: false
 
     LaunchedEffect(Unit) {
-        try {
-            favoritesRepo.observeFavorites().catch { }.collect { list -> favorites = list }
-        } catch (_: Exception) {}
+        try { favoritesRepo.observeFavorites().catch { }.collect { list -> favorites = list } } catch (_: Exception) {}
     }
 
     LaunchedEffect(isSpotifyConnected) {
@@ -87,152 +82,78 @@ fun LibraryScreen(
     }
 
     Scaffold(
-        bottomBar = {
-            BottomNavBar(
-                currentTab = currentTab, onHome = onNavigateToHome, onSearch = onNavigateToSearch,
-                onFriends = onNavigateToFriends, onLibrary = { }, themeState = themeState
-            )
-        }
+        bottomBar = { BottomNavBar(currentTab = currentTab, onHome = onNavigateToHome, onSearch = onNavigateToSearch, onFriends = onNavigateToFriends, onLibrary = { }, themeState = themeState) }
     ) { padding ->
-        Column(
-            Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Column(Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)) {
+
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Your Library", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = primaryText)
             }
 
             Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 filters.forEach { filter ->
                     FilterChip(
-                        selected = selectedFilter == filter,
-                        onClick  = { selectedFilter = filter },
-                        label    = { Text(filter, fontSize = 13.sp) },
-                        shape    = RoundedCornerShape(20.dp),
-                        colors   = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFF1A1A2E),
-                            selectedLabelColor     = Color.White,
-                            containerColor         = cardBg,
-                            labelColor             = primaryText
-                        )
+                        selected = selectedFilter == filter, onClick = { selectedFilter = filter },
+                        label    = { Text(filter, fontSize = 13.sp) }, shape = RoundedCornerShape(20.dp),
+                        colors   = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF1A1A2E), selectedLabelColor = Color.White, containerColor = cardBg, labelColor = primaryText)
                     )
                 }
             }
 
             Spacer(Modifier.height(12.dp))
 
-            LazyColumn(
-                contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                item {
-                    LibraryItem(
-                        icon = Icons.Filled.Favorite, iconBg = Color(0xFFFF6B6B),
-                        title = "Liked Songs", subtitle = "${favorites.size} songs",
-                        primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint,
-                        onClick = { selectedFilter = "Favorites" }
-                    )
-                }
-                item {
-                    LibraryItem(
-                        icon = Icons.Filled.History, iconBg = Color(0xFF6A5ACD),
-                        title = "Recently Played", subtitle = "Jump back in",
-                        primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint,
-                        onClick = { }
-                    )
-                }
+            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+
+                item { LibraryItem(icon = Icons.Filled.Favorite, iconBg = Color(0xFFFF6B6B), title = "Liked Songs", subtitle = "${favorites.size} songs", primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint, onClick = { selectedFilter = "Favorites" }) }
+                item { LibraryItem(icon = Icons.Filled.History, iconBg = Color(0xFF6A5ACD), title = "Recently Played", subtitle = "Jump back in", primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint, onClick = { }) }
 
                 if (selectedFilter == "Playlists" || selectedFilter == "All") {
                     if (!isSpotifyConnected) {
-                        // Clickable green banner — same style as HomeScreen
+                        // Exactly matches HomeScreen's Spotify banner style
                         item {
                             Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .clickable { onNavigateToSpotify() },
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1DB954)),
-                                shape  = RoundedCornerShape(16.dp)
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { onNavigateToSpotify() },
+                                colors   = CardDefaults.cardColors(containerColor = Color(0xFF1DB954)),
+                                shape    = RoundedCornerShape(16.dp)
                             ) {
                                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("🎵", fontSize = 24.sp)
-                                    Spacer(Modifier.width(12.dp))
+//                                    Text("🎵", fontSize = 24.sp)
+//                                    Spacer(Modifier.width(12.dp))
                                     Column(Modifier.weight(1f)) {
-                                        Text(
-                                            "Connect Spotify",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize   = 15.sp,
-                                            color      = Color.White
-                                        )
-                                        Text(
-                                            "Tap to see your playlists here",
-                                            fontSize = 12.sp,
-                                            color    = Color.White.copy(alpha = 0.8f)
-                                        )
+                                        Text("Connect Spotify", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                                        Text("Tap to see your playlists here", fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f))
                                     }
                                     Icon(Icons.Filled.ChevronRight, null, tint = Color.White)
                                 }
                             }
                         }
                     } else if (playlistsLoading) {
-                        item {
-                            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color(0xFF1DB954))
-                            }
-                        }
+                        item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color(0xFF1DB954)) } }
                     } else if (playlists.isNotEmpty()) {
-                        item {
-                            Spacer(Modifier.height(12.dp))
-                            Text("Your Spotify Playlists", fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                                color = primaryText, modifier = Modifier.padding(vertical = 8.dp))
-                        }
-                        items(playlists) { playlist ->
-                            PlaylistItem(
-                                playlist = playlist, isDark = isDark,
-                                primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint,
-                                onClick = {}
-                            )
-                        }
+                        item { Spacer(Modifier.height(12.dp)); Text("Your Spotify Playlists", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = primaryText, modifier = Modifier.padding(vertical = 8.dp)) }
+                        items(playlists) { playlist -> PlaylistItem(playlist = playlist, isDark = isDark, primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint, onClick = {}) }
                     }
                 }
 
                 if (selectedFilter == "Favorites" || selectedFilter == "All") {
                     if (favorites.isNotEmpty()) {
-                        item {
-                            Spacer(Modifier.height(12.dp))
-                            Text("Your Favorites", fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                                color = primaryText, modifier = Modifier.padding(vertical = 8.dp))
-                        }
+                        item { Spacer(Modifier.height(12.dp)); Text("Your Favorites", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = primaryText, modifier = Modifier.padding(vertical = 8.dp)) }
                         items(favorites) { (docId, song) ->
                             val songId    = "${song.artist}-${song.title}"
                             val isLoading = loadingSongId == songId
                             FavoriteItem(
-                                song = song, isLoading = isLoading,
-                                isDark = isDark, primaryText = primaryText, secondaryText = secondaryText,
+                                song = song, isLoading = isLoading, isDark = isDark, primaryText = primaryText, secondaryText = secondaryText,
                                 onPlay = {
                                     if (musicPlayerViewModel != null) {
                                         loadingSongId = songId
-                                        musicPlayerViewModel.playFromRecommendation(song.title, song.artist) { success, _ ->
-                                            loadingSongId = null
-                                            if (success) onNavigateToMusicPlayer()
-                                        }
+                                        musicPlayerViewModel.playFromRecommendation(song.title, song.artist) { success, _ -> loadingSongId = null; if (success) onNavigateToMusicPlayer() }
                                     }
                                 },
                                 onRemove = { scope.launch { try { favoritesRepo.removeFavorite(docId) } catch (_: Exception) {} } }
                             )
                         }
                     } else if (selectedFilter == "Favorites") {
-                        item {
-                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("💖", fontSize = 40.sp); Spacer(Modifier.height(8.dp))
-                                    Text("No favorites yet", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = primaryText)
-                                    Text("Like songs to see them here!", color = secondaryText, fontSize = 13.sp)
-                                }
-                            }
-                        }
+                        item { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("💖", fontSize = 40.sp); Spacer(Modifier.height(8.dp)); Text("No favorites yet", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = primaryText); Text("Like songs to see them here!", color = secondaryText, fontSize = 13.sp) } } }
                     }
                 }
                 item { Spacer(Modifier.height(80.dp)) }
@@ -242,91 +163,40 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun LibraryItem(
-    icon: ImageVector, iconBg: Color, title: String, subtitle: String,
-    primaryText: Color, secondaryText: Color, iconTint: Color,
-    onClick: () -> Unit
-) {
-    Row(
-        Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)).background(iconBg), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = Color.White, modifier = Modifier.size(26.dp))
-        }
+private fun LibraryItem(icon: ImageVector, iconBg: Color, title: String, subtitle: String, primaryText: Color, secondaryText: Color, iconTint: Color, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)).background(iconBg), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(26.dp)) }
         Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title,    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText)
-            Text(subtitle, fontSize = 13.sp, color = secondaryText)
-        }
+        Column(Modifier.weight(1f)) { Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText); Text(subtitle, fontSize = 13.sp, color = secondaryText) }
         Icon(Icons.Filled.ChevronRight, null, tint = iconTint, modifier = Modifier.size(20.dp))
     }
 }
 
 @Composable
-private fun PlaylistItem(
-    playlist: SpotifyPlaylistInfo,
-    isDark: Boolean = false,
-    primaryText: Color = Color(0xFF1A1A2E),
-    secondaryText: Color = Color(0xFF666677),
-    iconTint: Color = Color(0xFF666677),
-    onClick: () -> Unit
-) {
+private fun PlaylistItem(playlist: SpotifyPlaylistInfo, isDark: Boolean = false, primaryText: Color = Color(0xFF1A1A2E), secondaryText: Color = Color(0xFF666677), iconTint: Color = Color(0xFF666677), onClick: () -> Unit) {
     val placeholderBg = if (isDark) Color(0xFF2A2A3E) else Color(0xFF1DB954).copy(alpha = 0.2f)
-    Row(
-        Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (playlist.imageUrl.isNotEmpty()) {
-            AsyncImage(
-                model = playlist.imageUrl, contentDescription = playlist.name,
-                contentScale = ContentScale.Crop,
-                modifier     = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))
-            )
-        } else {
-            Box(
-                Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(placeholderBg),
-                contentAlignment = Alignment.Center
-            ) { Text("🎵", fontSize = 22.sp) }
-        }
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (playlist.imageUrl.isNotEmpty()) AsyncImage(model = playlist.imageUrl, contentDescription = playlist.name, contentScale = ContentScale.Crop, modifier = Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)))
+        else Box(Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(placeholderBg), contentAlignment = Alignment.Center) { Text("🎵", fontSize = 22.sp) }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(playlist.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${playlist.trackCount} tracks · ${playlist.ownerName}", fontSize = 12.sp,
-                color = secondaryText, maxLines = 1)
+            Text(playlist.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${playlist.trackCount} tracks · ${playlist.ownerName}", fontSize = 12.sp, color = secondaryText, maxLines = 1)
         }
         Icon(Icons.Filled.ChevronRight, null, tint = iconTint, modifier = Modifier.size(20.dp))
     }
 }
 
 @Composable
-private fun FavoriteItem(
-    song: SongRecommendation, isLoading: Boolean = false,
-    isDark: Boolean = false,
-    primaryText: Color = Color(0xFF1A1A2E),
-    secondaryText: Color = Color(0xFF666677),
-    onPlay: () -> Unit, onRemove: () -> Unit
-) {
+private fun FavoriteItem(song: SongRecommendation, isLoading: Boolean = false, isDark: Boolean = false, primaryText: Color = Color(0xFF1A1A2E), secondaryText: Color = Color(0xFF666677), onPlay: () -> Unit, onRemove: () -> Unit) {
     val thumbBg = if (isDark) Color(0xFF2A2A3E) else Color(0xFFEEEEEE)
-    Row(
-        Modifier.fillMaxWidth().clickable(enabled = !isLoading) { onPlay() }.padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).background(thumbBg),
-            contentAlignment = Alignment.Center
-        ) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = !isLoading) { onPlay() }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).background(thumbBg), contentAlignment = Alignment.Center) {
             if (isLoading) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color(0xFF1DB954))
             else Text("🎵", fontSize = 20.sp)
         }
         Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(song.title,  fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText,   maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artist, fontSize = 13.sp, color = secondaryText, maxLines = 1)
-        }
-        IconButton(onClick = onRemove) {
-            Icon(Icons.Filled.Favorite, "Remove", tint = Color.Red, modifier = Modifier.size(20.dp))
-        }
+        Column(Modifier.weight(1f)) { Text(song.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(song.artist, fontSize = 13.sp, color = secondaryText, maxLines = 1) }
+        IconButton(onClick = onRemove) { Icon(Icons.Filled.Favorite, "Remove", tint = Color.Red, modifier = Modifier.size(20.dp)) }
     }
 }

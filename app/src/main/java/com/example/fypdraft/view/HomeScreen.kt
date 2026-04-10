@@ -397,8 +397,8 @@ fun HomeScreen(
                             colors = CardDefaults.cardColors(containerColor = if (isExpired) Color(0xFFFF9800) else Color(0xFF1DB954))
                         ) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                if (isExpired) Icon(Icons.Filled.Warning, null, tint = Color.White) else Text("🎵", fontSize = 24.sp)
-                                Spacer(Modifier.width(12.dp))
+                                if (isExpired) Icon(Icons.Filled.Warning, null, tint = Color.White)
+//                                Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(if (isExpired) "Session expired" else "Connect Spotify", color = Color.White, fontWeight = FontWeight.Bold)
                                     Text(if (isExpired) "Tap to reconnect" else "Get personalized recommendations", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)

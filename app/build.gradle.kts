@@ -165,4 +165,7 @@ dependencies {
 
     // Media player
     implementation("androidx.media:media:1.7.0")
+
+    // Friendsscreen
+    implementation("com.google.zxing:core:3.5.2")
 }
