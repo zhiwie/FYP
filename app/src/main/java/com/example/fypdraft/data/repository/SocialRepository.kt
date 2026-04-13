@@ -29,7 +29,9 @@ data class MusicMoment(
     val caption: String = "",
     val isVibeCheck: Boolean = false,
     val timestamp: Long = System.currentTimeMillis(),
-    val reactions: Map<String, String> = emptyMap()
+    val reactions: Map<String, String> = emptyMap(),
+    val userMascotType: String = "CAT",
+    val vibeSnapUrl: String? = null
 )
 
 data class FriendProfile(
@@ -37,7 +39,9 @@ data class FriendProfile(
     val displayName: String,
     val isOnline: Boolean = false,
     val lastActive: Long = 0L,
-    val currentMoment: MusicMoment? = null
+    val currentMoment: MusicMoment? = null,
+    val mascotType: String = "CAT",
+    val listenTogetherSessionId: String? = null
 )
 
 data class FriendChatMessage(
@@ -45,52 +49,154 @@ data class FriendChatMessage(
     val senderId: String = "",
     val text: String = "",
     val timestamp: Long = System.currentTimeMillis(),
-    val isFromMe: Boolean = false
+    val isFromMe: Boolean = false,
+    val songTitle: String? = null,
+    val songArtist: String? = null,
+    val songAlbumArt: String? = null,
+    val songSpotifyUri: String? = null,
+    val messageType: String = "text"
 )
 
 data class FriendSuggestion(
     val uid: String,
     val displayName: String,
     val mutualFriendCount: Int = 0,
-    val matchedByPhone: Boolean = false
+    val matchedByPhone: Boolean = false,
+    val mascotType: String = "CAT"
+)
+
+data class ListenTogetherSession(
+    val sessionId: String = "",
+    val hostUid: String = "",
+    val hostName: String = "",
+    val participantUids: List<String> = emptyList(),
+    val trackTitle: String = "",
+    val trackArtist: String = "",
+    val albumArtUrl: String = "",
+    val spotifyUri: String? = null,
+    val startedAt: Long = System.currentTimeMillis(),
+    val isActive: Boolean = true
+)
+
+data class VibeGroup(
+    val groupId: String = "",
+    val genre: String = "",
+    val memberUids: List<String> = emptyList(),
+    val memberNames: List<String> = emptyList(),
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 // ── Repository ───────────────────────────────────────────────────────────
 
 class SocialRepository {
-    private val TAG = "SocialRepo"
+    private val TAG  = "SocialRepo"
     private val db   = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
 
     private fun uid(): String? = auth.currentUser?.uid
     private fun uname(): String = auth.currentUser?.displayName ?: "Someone"
 
-    // ── Add friend by username ────────────────────────────────────────
+    // ── Add friend (both ways, atomic batch) ─────────────────────────
 
     suspend fun addFriend(username: String): Result<String> {
         val me = uid() ?: return Result.failure(Exception("Not logged in"))
         return try {
+            // 1. Find target user by username
             val q = db.collection("users")
-                .whereEqualTo("username", username.lowercase().trim())
+                .whereEqualTo("username", username.trim().lowercase())
                 .limit(1).get().await()
 
             if (q.isEmpty) return Result.failure(Exception("User '$username' not found"))
 
             val friendDoc = q.documents.first()
             val fuid      = friendDoc.id
+
             if (fuid == me) return Result.failure(Exception("That's you!"))
 
-            val existing = db.collection("users").document(me)
-                .collection("friends").whereEqualTo("uid", fuid).get().await()
-            if (!existing.isEmpty) return Result.failure(Exception("Already friends"))
+            // 2. Check already friends — query by document ID directly
+            val alreadyFriends = db.collection("users").document(me)
+                .collection("friends").document(fuid).get().await().exists()
 
-            db.collection("users").document(me).collection("friends")
-                .add(mapOf("uid" to fuid, "addedAt" to Timestamp.now())).await()
-            db.collection("users").document(fuid).collection("friends")
-                .add(mapOf("uid" to me, "addedAt" to Timestamp.now())).await()
+            if (alreadyFriends) return Result.failure(Exception("Already friends!"))
 
+            // 3. Fetch my own profile to write into their friends list
+            val myDoc = db.collection("users").document(me).get().await()
+            val now   = System.currentTimeMillis()
+
+            // 4. Atomic batch — write BOTH sides simultaneously
+            val batch = db.batch()
+
+            // Write friend into MY friends subcollection (doc ID = their UID)
+            batch.set(
+                db.collection("users").document(me)
+                    .collection("friends").document(fuid),
+                mapOf(
+                    "uid"         to fuid,
+                    "username"    to (friendDoc.getString("username") ?: ""),
+                    "displayName" to (friendDoc.getString("displayName") ?: username),
+                    "email"       to (friendDoc.getString("email") ?: ""),
+                    "addedAt"     to now
+                )
+            )
+
+            // Write me into THEIR friends subcollection (doc ID = my UID)
+            batch.set(
+                db.collection("users").document(fuid)
+                    .collection("friends").document(me),
+                mapOf(
+                    "uid"         to me,
+                    "username"    to (myDoc.getString("username") ?: ""),
+                    "displayName" to (myDoc.getString("displayName") ?: uname()),
+                    "email"       to (myDoc.getString("email") ?: ""),
+                    "addedAt"     to now
+                )
+            )
+
+            batch.commit().await()
+            Log.d(TAG, "addFriend success: $me <-> $fuid")
             Result.success(friendDoc.getString("displayName") ?: username)
-        } catch (e: Exception) { Result.failure(e) }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "addFriend failed", e)
+            Result.failure(e)
+        }
+    }
+
+    // ── Remove friend (both ways, atomic batch) ───────────────────────
+
+    suspend fun removeFriend(friendUid: String): Result<Unit> {
+        val me = uid() ?: return Result.failure(Exception("Not logged in"))
+        return try {
+            // Find the friend document in MY list (doc ID = friendUid directly)
+            val myFriendRef     = db.collection("users").document(me)
+                .collection("friends").document(friendUid)
+            val theirFriendRef  = db.collection("users").document(friendUid)
+                .collection("friends").document(me)
+
+            // Also find by "uid" field in case old docs used add() with random IDs
+            val myOldDocs = db.collection("users").document(me)
+                .collection("friends").whereEqualTo("uid", friendUid).get().await()
+            val theirOldDocs = db.collection("users").document(friendUid)
+                .collection("friends").whereEqualTo("uid", me).get().await()
+
+            val batch = db.batch()
+
+            // Delete the known-ID documents
+            batch.delete(myFriendRef)
+            batch.delete(theirFriendRef)
+
+            // Also delete any old random-ID documents (from before the fix)
+            myOldDocs.documents.forEach { batch.delete(it.reference) }
+            theirOldDocs.documents.forEach { batch.delete(it.reference) }
+
+            batch.commit().await()
+            Log.d(TAG, "removeFriend success: $me <-> $friendUid")
+            Result.success(Unit)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "removeFriend failed", e)
+            Result.failure(e)
+        }
     }
 
     // ── Mutual friend suggestions ─────────────────────────────────────
@@ -123,9 +229,10 @@ class SocialRepository {
                 .take(limit)
                 .mapNotNull { (candidateUid, count) ->
                     try {
-                        val doc  = db.collection("users").document(candidateUid).get().await()
-                        val name = doc.getString("displayName") ?: doc.getString("username") ?: return@mapNotNull null
-                        FriendSuggestion(uid = candidateUid, displayName = name, mutualFriendCount = count)
+                        val doc    = db.collection("users").document(candidateUid).get().await()
+                        val name   = doc.getString("displayName") ?: doc.getString("username") ?: return@mapNotNull null
+                        val mascot = doc.getString("mascotType") ?: "CAT"
+                        FriendSuggestion(uid = candidateUid, displayName = name, mutualFriendCount = count, mascotType = mascot)
                     } catch (_: Exception) { null }
                 }
         } catch (e: Exception) {
@@ -193,8 +300,9 @@ class SocialRepository {
                     snap.documents.forEach { d ->
                         val candidateUid = d.id
                         if (candidateUid != me && candidateUid !in myFriendUids) {
-                            val name = d.getString("displayName") ?: d.getString("username") ?: return@forEach
-                            suggestions.add(FriendSuggestion(uid = candidateUid, displayName = name, matchedByPhone = true))
+                            val name   = d.getString("displayName") ?: d.getString("username") ?: return@forEach
+                            val mascot = d.getString("mascotType") ?: "CAT"
+                            suggestions.add(FriendSuggestion(uid = candidateUid, displayName = name, matchedByPhone = true, mascotType = mascot))
                         }
                     }
                 } catch (_: Exception) {}
@@ -227,23 +335,26 @@ class SocialRepository {
 
     suspend fun shareNowPlaying(
         trackTitle: String, trackArtist: String,
-        albumArtUrl: String, spotifyUri: String?, mood: String
+        albumArtUrl: String, spotifyUri: String?, mood: String,
+        mascotType: String = "CAT"
     ) {
         val me = uid() ?: return
         try {
             db.collection("moments").document(me).set(mapOf(
-                "userId"      to me,
-                "userName"    to uname(),
-                "trackTitle"  to trackTitle,
-                "trackArtist" to trackArtist,
-                "albumArtUrl" to albumArtUrl,
-                "spotifyUri"  to spotifyUri,
-                "mood"        to mood,
-                "moodEmoji"   to moodEmoji(mood),
-                "caption"     to "",
-                "isVibeCheck" to false,
-                "timestamp"   to Timestamp.now(),
-                "reactions"   to emptyMap<String, String>()
+                "userId"         to me,
+                "userName"       to uname(),
+                "trackTitle"     to trackTitle,
+                "trackArtist"    to trackArtist,
+                "albumArtUrl"    to albumArtUrl,
+                "spotifyUri"     to spotifyUri,
+                "mood"           to mood,
+                "moodEmoji"      to moodEmoji(mood),
+                "caption"        to "",
+                "isVibeCheck"    to false,
+                "timestamp"      to Timestamp.now(),
+                "reactions"      to emptyMap<String, String>(),
+                "userMascotType" to mascotType,
+                "vibeSnapUrl"    to null
             )).await()
         } catch (e: Exception) { Log.e(TAG, "shareNowPlaying", e) }
     }
@@ -253,22 +364,26 @@ class SocialRepository {
     suspend fun postVibeCheck(
         trackTitle: String, trackArtist: String,
         albumArtUrl: String, spotifyUri: String?,
-        mood: String, caption: String
+        mood: String, caption: String,
+        mascotType: String = "CAT",
+        vibeSnapUrl: String? = null
     ) {
         val me   = uid() ?: return
         val data = mapOf(
-            "userId"      to me,
-            "userName"    to uname(),
-            "trackTitle"  to trackTitle,
-            "trackArtist" to trackArtist,
-            "albumArtUrl" to albumArtUrl,
-            "spotifyUri"  to spotifyUri,
-            "mood"        to mood,
-            "moodEmoji"   to moodEmoji(mood),
-            "caption"     to caption,
-            "isVibeCheck" to true,
-            "timestamp"   to Timestamp.now(),
-            "reactions"   to emptyMap<String, String>()
+            "userId"         to me,
+            "userName"       to uname(),
+            "trackTitle"     to trackTitle,
+            "trackArtist"    to trackArtist,
+            "albumArtUrl"    to albumArtUrl,
+            "spotifyUri"     to spotifyUri,
+            "mood"           to mood,
+            "moodEmoji"      to moodEmoji(mood),
+            "caption"        to caption,
+            "isVibeCheck"    to true,
+            "timestamp"      to Timestamp.now(),
+            "reactions"      to emptyMap<String, String>(),
+            "userMascotType" to mascotType,
+            "vibeSnapUrl"    to vibeSnapUrl
         )
         try {
             db.collection("moments").document(me).set(data).await()
@@ -321,22 +436,33 @@ class SocialRepository {
     suspend fun getFriendsWithProfiles(): List<FriendProfile> {
         val me = uid() ?: return emptyList()
         return try {
+            // Use document ID as UID (new approach) with fallback to "uid" field (old docs)
             val uids = db.collection("users").document(me).collection("friends")
-                .get().await().documents.mapNotNull { it.getString("uid") }
+                .get().await().documents.map { doc ->
+                    // Prefer "uid" field; fall back to document ID
+                    doc.getString("uid")?.takeIf { it.isNotBlank() } ?: doc.id
+                }.filter { it.isNotBlank() }.distinct()
+
             uids.mapNotNull { fuid ->
                 try {
-                    val userDoc = db.collection("users").document(fuid).get().await()
-                    val name    = userDoc.getString("displayName")
+                    val userDoc   = db.collection("users").document(fuid).get().await()
+                    val name      = userDoc.getString("displayName")
                         ?: userDoc.getString("username") ?: "Unknown"
+                    val mascot    = userDoc.getString("mascotType") ?: "CAT"
                     val momentDoc = db.collection("moments").document(fuid).get().await()
                     val moment    = if (momentDoc.exists())
                         docToMoment(momentDoc.id, momentDoc.data ?: emptyMap()) else null
-                    val lastActive = moment?.timestamp ?: 0L
+                    val lastActive    = moment?.timestamp ?: 0L
+                    val ltSession     = getActiveListenTogetherSession(fuid)
+
                     FriendProfile(
-                        fuid, name,
-                        isOnline      = (System.currentTimeMillis() - lastActive) < 15 * 60_000,
-                        lastActive    = lastActive,
-                        currentMoment = moment
+                        uid                     = fuid,
+                        displayName             = name,
+                        isOnline                = (System.currentTimeMillis() - lastActive) < 15 * 60_000,
+                        lastActive              = lastActive,
+                        currentMoment           = moment,
+                        mascotType              = mascot,
+                        listenTogetherSessionId = ltSession?.sessionId
                     )
                 } catch (_: Exception) { null }
             }.sortedWith(
@@ -346,7 +472,157 @@ class SocialRepository {
         } catch (e: Exception) { Log.e(TAG, "getFriends", e); emptyList() }
     }
 
-    // ── Chat ──────────────────────────────────────────────────────────
+    // ── Listen Together ───────────────────────────────────────────────
+
+    suspend fun startListenTogetherSession(
+        trackTitle: String, trackArtist: String,
+        albumArtUrl: String, spotifyUri: String?,
+        friendUids: List<String>
+    ): ListenTogetherSession? {
+        val me = uid() ?: return null
+        return try {
+            val sessionData = mapOf(
+                "hostUid"         to me,
+                "hostName"        to uname(),
+                "participantUids" to (friendUids + me).distinct(),
+                "trackTitle"      to trackTitle,
+                "trackArtist"     to trackArtist,
+                "albumArtUrl"     to albumArtUrl,
+                "spotifyUri"      to spotifyUri,
+                "startedAt"       to Timestamp.now(),
+                "isActive"        to true
+            )
+            val ref = db.collection("listenTogether").add(sessionData).await()
+            ListenTogetherSession(
+                sessionId        = ref.id,
+                hostUid          = me,
+                hostName         = uname(),
+                participantUids  = (friendUids + me).distinct(),
+                trackTitle       = trackTitle,
+                trackArtist      = trackArtist,
+                albumArtUrl      = albumArtUrl,
+                spotifyUri       = spotifyUri,
+                startedAt        = System.currentTimeMillis(),
+                isActive         = true
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "startListenTogetherSession", e)
+            null
+        }
+    }
+
+    suspend fun endListenTogetherSession(sessionId: String) {
+        try {
+            db.collection("listenTogether").document(sessionId)
+                .update("isActive", false).await()
+        } catch (e: Exception) { Log.e(TAG, "endSession", e) }
+    }
+
+    suspend fun getActiveListenTogetherSession(friendUid: String): ListenTogetherSession? {
+        return try {
+            val snap = db.collection("listenTogether")
+                .whereArrayContains("participantUids", friendUid)
+                .whereEqualTo("isActive", true)
+                .limit(1)
+                .get().await()
+            if (snap.isEmpty) return null
+            val doc  = snap.documents.first()
+            val data = doc.data ?: return null
+            @Suppress("UNCHECKED_CAST")
+            ListenTogetherSession(
+                sessionId        = doc.id,
+                hostUid          = data["hostUid"]         as? String ?: "",
+                hostName         = data["hostName"]         as? String ?: "",
+                participantUids  = (data["participantUids"] as? List<String>) ?: emptyList(),
+                trackTitle       = data["trackTitle"]       as? String ?: "",
+                trackArtist      = data["trackArtist"]      as? String ?: "",
+                albumArtUrl      = data["albumArtUrl"]      as? String ?: "",
+                spotifyUri       = data["spotifyUri"]       as? String,
+                startedAt        = (data["startedAt"] as? Timestamp)?.toDate()?.time ?: 0L,
+                isActive         = data["isActive"]         as? Boolean ?: false
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "getActiveListenTogetherSession", e)
+            null
+        }
+    }
+
+    fun listenToMyActiveSessions(
+        onUpdate: (ListenTogetherSession?) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration {
+        val me = uid() ?: run {
+            onUpdate(null)
+            return object : com.google.firebase.firestore.ListenerRegistration { override fun remove() {} }
+        }
+        return db.collection("listenTogether")
+            .whereArrayContains("participantUids", me)
+            .whereEqualTo("isActive", true)
+            .limit(1)
+            .addSnapshotListener { snap, error ->
+                if (error != null) { Log.e(TAG, "listenToMyActiveSessions", error); return@addSnapshotListener }
+                if (snap == null || snap.isEmpty) { onUpdate(null); return@addSnapshotListener }
+                val doc  = snap.documents.first()
+                val data = doc.data ?: run { onUpdate(null); return@addSnapshotListener }
+                @Suppress("UNCHECKED_CAST")
+                onUpdate(ListenTogetherSession(
+                    sessionId        = doc.id,
+                    hostUid          = data["hostUid"]         as? String ?: "",
+                    hostName         = data["hostName"]         as? String ?: "",
+                    participantUids  = (data["participantUids"] as? List<String>) ?: emptyList(),
+                    trackTitle       = data["trackTitle"]       as? String ?: "",
+                    trackArtist      = data["trackArtist"]      as? String ?: "",
+                    albumArtUrl      = data["albumArtUrl"]      as? String ?: "",
+                    spotifyUri       = data["spotifyUri"]       as? String,
+                    startedAt        = (data["startedAt"] as? Timestamp)?.toDate()?.time ?: 0L,
+                    isActive         = data["isActive"]         as? Boolean ?: false
+                ))
+            }
+    }
+
+    fun listenToFriendMoment(
+        friendUid: String,
+        onUpdate: (MusicMoment?) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration {
+        return db.collection("moments").document(friendUid)
+            .addSnapshotListener { snap, error ->
+                if (error != null) { Log.e(TAG, "listenToFriendMoment", error); return@addSnapshotListener }
+                if (snap == null || !snap.exists()) { onUpdate(null); return@addSnapshotListener }
+                onUpdate(docToMoment(snap.id, snap.data ?: emptyMap()))
+            }
+    }
+
+    fun listenToChatMessages(
+        friendUid: String,
+        onUpdate: (List<FriendChatMessage>) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration {
+        val me = uid() ?: run {
+            onUpdate(emptyList())
+            return object : com.google.firebase.firestore.ListenerRegistration { override fun remove() {} }
+        }
+        val convoId = chatDocId(me, friendUid)
+        return db.collection("chats").document(convoId).collection("messages")
+            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .limit(100)
+            .addSnapshotListener { snap, error ->
+                if (error != null) { Log.e(TAG, "listenToChat", error); return@addSnapshotListener }
+                val messages = snap?.documents?.map { doc ->
+                    val ts = doc.getTimestamp("timestamp")?.toDate()?.time ?: System.currentTimeMillis()
+                    FriendChatMessage(
+                        id             = doc.id,
+                        senderId       = doc.getString("senderId") ?: "",
+                        text           = doc.getString("text") ?: "",
+                        timestamp      = ts,
+                        isFromMe       = doc.getString("senderId") == me,
+                        songTitle      = doc.getString("songTitle"),
+                        songArtist     = doc.getString("songArtist"),
+                        songAlbumArt   = doc.getString("songAlbumArt"),
+                        songSpotifyUri = doc.getString("songSpotifyUri"),
+                        messageType    = doc.getString("messageType") ?: "text"
+                    )
+                } ?: emptyList()
+                onUpdate(messages)
+            }
+    }
 
     private fun chatDocId(a: String, b: String): String =
         if (a < b) "${a}_${b}" else "${b}_${a}"
@@ -365,9 +641,45 @@ class SocialRepository {
                 SetOptions.merge()
             ).await()
             db.collection("chats").document(convoId).collection("messages")
-                .add(mapOf("senderId" to me, "text" to text, "timestamp" to Timestamp.now()))
-                .await()
+                .add(mapOf(
+                    "senderId"    to me,
+                    "text"        to text,
+                    "timestamp"   to Timestamp.now(),
+                    "messageType" to "text"
+                )).await()
         } catch (e: Exception) { Log.e(TAG, "sendChat", e) }
+    }
+
+    suspend fun sendSongMessage(
+        friendUid: String,
+        trackTitle: String, trackArtist: String,
+        albumArtUrl: String, spotifyUri: String?
+    ) {
+        val me = uid() ?: return
+        try {
+            val convoId = chatDocId(me, friendUid)
+            val preview = "🎵 $trackTitle — $trackArtist"
+            db.collection("chats").document(convoId).set(
+                mapOf(
+                    "participants"  to listOf(me, friendUid),
+                    "lastMessage"   to preview,
+                    "lastTimestamp" to Timestamp.now(),
+                    "lastSenderId"  to me
+                ),
+                SetOptions.merge()
+            ).await()
+            db.collection("chats").document(convoId).collection("messages")
+                .add(mapOf(
+                    "senderId"       to me,
+                    "text"           to preview,
+                    "timestamp"      to Timestamp.now(),
+                    "messageType"    to "song",
+                    "songTitle"      to trackTitle,
+                    "songArtist"     to trackArtist,
+                    "songAlbumArt"   to albumArtUrl,
+                    "songSpotifyUri" to spotifyUri
+                )).await()
+        } catch (e: Exception) { Log.e(TAG, "sendSongMessage", e) }
     }
 
     suspend fun getChatMessages(friendUid: String): List<FriendChatMessage> {
@@ -381,14 +693,29 @@ class SocialRepository {
                     val ts = doc.getTimestamp("timestamp")?.toDate()?.time
                         ?: System.currentTimeMillis()
                     FriendChatMessage(
-                        id       = doc.id,
-                        senderId = doc.getString("senderId") ?: "",
-                        text     = doc.getString("text") ?: "",
-                        timestamp = ts,
-                        isFromMe  = doc.getString("senderId") == me
+                        id             = doc.id,
+                        senderId       = doc.getString("senderId") ?: "",
+                        text           = doc.getString("text") ?: "",
+                        timestamp      = ts,
+                        isFromMe       = doc.getString("senderId") == me,
+                        songTitle      = doc.getString("songTitle"),
+                        songArtist     = doc.getString("songArtist"),
+                        songAlbumArt   = doc.getString("songAlbumArt"),
+                        songSpotifyUri = doc.getString("songSpotifyUri"),
+                        messageType    = doc.getString("messageType") ?: "text"
                     )
                 }
         } catch (e: Exception) { Log.e(TAG, "getMessages", e); emptyList() }
+    }
+
+    // ── Mascot type sync ──────────────────────────────────────────────
+
+    suspend fun updateMyMascotType(mascotType: String) {
+        val me = uid() ?: return
+        try {
+            db.collection("users").document(me)
+                .set(mapOf("mascotType" to mascotType), SetOptions.merge()).await()
+        } catch (e: Exception) { Log.e(TAG, "updateMascotType", e) }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -415,19 +742,21 @@ class SocialRepository {
             else         -> System.currentTimeMillis()
         }
         return MusicMoment(
-            id          = id,
-            userId      = data["userId"]      as? String ?: "",
-            userName    = data["userName"]    as? String ?: "Someone",
-            trackTitle  = data["trackTitle"]  as? String ?: "",
-            trackArtist = data["trackArtist"] as? String ?: "",
-            albumArtUrl = data["albumArtUrl"] as? String ?: "",
-            spotifyUri  = data["spotifyUri"]  as? String,
-            mood        = data["mood"]        as? String ?: "neutral",
-            moodEmoji   = data["moodEmoji"]   as? String ?: "🎵",
-            caption     = data["caption"]     as? String ?: "",
-            isVibeCheck = data["isVibeCheck"] as? Boolean ?: false,
-            timestamp   = ts,
-            reactions   = (data["reactions"]  as? Map<String, String>) ?: emptyMap()
+            id             = id,
+            userId         = data["userId"]        as? String ?: "",
+            userName       = data["userName"]       as? String ?: "Someone",
+            trackTitle     = data["trackTitle"]     as? String ?: "",
+            trackArtist    = data["trackArtist"]    as? String ?: "",
+            albumArtUrl    = data["albumArtUrl"]    as? String ?: "",
+            spotifyUri     = data["spotifyUri"]     as? String,
+            mood           = data["mood"]           as? String ?: "neutral",
+            moodEmoji      = data["moodEmoji"]      as? String ?: "🎵",
+            caption        = data["caption"]        as? String ?: "",
+            isVibeCheck    = data["isVibeCheck"]    as? Boolean ?: false,
+            timestamp      = ts,
+            reactions      = (data["reactions"]     as? Map<String, String>) ?: emptyMap(),
+            userMascotType = data["userMascotType"] as? String ?: "CAT",
+            vibeSnapUrl    = data["vibeSnapUrl"]    as? String
         )
     }
 

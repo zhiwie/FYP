@@ -28,7 +28,12 @@ class AuthRepository {
     fun isUserLoggedIn(): Boolean       = auth.currentUser != null
 
     // ── Sign up ───────────────────────────────────────────────────────
-    suspend fun signUp(username: String, email: String, password: String): AuthResult {
+    suspend fun signUp(
+        username: String,
+        email: String,
+        password: String,
+        phoneNumber: String = ""        // new param — pass "" if not collected yet
+    ): AuthResult {
         return try {
             withTimeout(TIMEOUT_MS) {
                 if (!isPasswordValid(password)) return@withTimeout AuthResult(
@@ -38,46 +43,49 @@ class AuthRepository {
                 // Username uniqueness check
                 val taken = try {
                     !firestore.collection("users")
-                        .whereEqualTo("username", username.lowercase())
+                        .whereEqualTo("username", username.trim().lowercase())
                         .limit(1).get().await().isEmpty
                 } catch (_: Exception) { false }
 
                 if (taken) return@withTimeout AuthResult(false, "Username already taken")
 
                 val result = auth.createUserWithEmailAndPassword(email, password).await()
-                val user   = result.user ?: return@withTimeout AuthResult(false, "Failed to create account")
+                val user   = result.user
+                    ?: return@withTimeout AuthResult(false, "Failed to create account")
 
                 try {
-                    // Set Firebase Auth display name
                     user.updateProfile(
-                        UserProfileChangeRequest.Builder().setDisplayName(username).build()
+                        UserProfileChangeRequest.Builder()
+                            .setDisplayName(username.trim()).build()
                     ).await()
 
-                    // ── Write the public profile to Firestore ─────────
-                    // This is the ONLY place you ever need to create the users/{uid} document.
-                    // Firestore creates the collection automatically on first write.
-                    // The fields written here are the ones friend-search queries rely on.
                     val userData = hashMapOf(
-                        "uid"         to user.uid,
-                        "username"    to username.lowercase(),   // for Option A search
-                        "displayName" to username,
-                        "email"       to email.lowercase(),
-                        "createdAt"   to System.currentTimeMillis(),
+                        "uid"           to user.uid,
+                        "username"      to username.trim().lowercase(),
+                        "displayName"   to username.trim(),
+                        "email"         to email.trim().lowercase(),
+                        "phoneNumber"   to phoneNumber.trim(),   // e.g. "+60123456789"
+                        "createdAt"     to System.currentTimeMillis(),
                         "emailVerified" to false,
-                        // phoneHash is null until user opts in to contact matching (Option C)
-                        // It is written later by SocialRepository.uploadContactHashes()
-                        "phoneHash"   to null
+                        "phoneHash"     to null
                     )
-                    firestore.collection("users").document(user.uid).set(userData).await()
 
-                    // Firestore does NOT require pre-creating the friends subcollection.
-                    // It is created automatically when the first friend is added via addFriend().
+                    firestore.collection("users")
+                        .document(user.uid)
+                        .set(userData)
+                        .await()
+
+                    Log.d(TAG, "Firestore users doc created for ${user.uid}")
 
                     user.sendEmailVerification()
                     AuthResult(true, "Account created! Please verify your email.", user)
+
                 } catch (e: Exception) {
-                    Log.e(TAG, "Post-signup ops failed", e)
-                    AuthResult(true, "Account created!", user)   // auth succeeded even if profile write fails
+                    Log.e(TAG, "Post-signup Firestore write failed", e)
+                    // Firestore write failed — delete the Auth account so
+                    // the user can try again cleanly instead of being stuck
+                    try { user.delete().await() } catch (_: Exception) {}
+                    AuthResult(false, "Account setup failed. Please try again.")
                 }
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -93,7 +101,6 @@ class AuthRepository {
             })
         }
     }
-
     // ── Sign in ───────────────────────────────────────────────────────
     suspend fun signIn(emailOrUsername: String, password: String): AuthResult {
         return try {
@@ -102,7 +109,7 @@ class AuthRepository {
                 val email = if (input.contains("@")) {
                     input.lowercase()
                 } else {
-                    // Option A: look up email by username
+                    // Look up email by username
                     val snap = try {
                         firestore.collection("users")
                             .whereEqualTo("username", input.lowercase())
@@ -120,6 +127,32 @@ class AuthRepository {
                 val result = auth.signInWithEmailAndPassword(email, password).await()
                 val user   = result.user
                     ?: return@withTimeout AuthResult(false, "Login failed")
+
+                // Backfill missing Firestore doc (safety net for old accounts)
+                try {
+                    val docRef = firestore.collection("users").document(user.uid)
+                    val doc    = docRef.get().await()
+                    if (!doc.exists()) {
+                        val userData = hashMapOf(
+                            "uid"           to user.uid,
+                            "username"      to (user.displayName?.trim()?.lowercase()
+                                ?: email.substringBefore("@").lowercase()),
+                            "displayName"   to (user.displayName?.takeIf { it.isNotBlank() }
+                                ?: email.substringBefore("@")),
+                            "email"         to email.trim().lowercase(),
+                            "phoneNumber"   to "",
+                            "createdAt"     to System.currentTimeMillis(),
+                            "emailVerified" to user.isEmailVerified,
+                            "phoneHash"     to null
+                        )
+                        docRef.set(userData).await()
+                        Log.d(TAG, "Backfilled missing Firestore doc for ${user.uid}")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Backfill failed (non-fatal)", e)
+                    // Non-fatal — login still succeeds even if backfill fails
+                }
+
                 AuthResult(true, "Login successful", user)
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {

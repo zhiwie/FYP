@@ -290,6 +290,8 @@ fun MoodSyncApp(
 
             Screen.FRIENDS -> FriendsScreen(
                 musicPlayerViewModel    = musicPlayerViewModel,
+                petState                = petState,
+                spotifyRepository       = spotifyRepository,
                 themeState              = themeState,
                 onNavigateToHome        = { navigateBack() },
                 onNavigateToSearch      = { bottomNav(Screen.SEARCH) },
