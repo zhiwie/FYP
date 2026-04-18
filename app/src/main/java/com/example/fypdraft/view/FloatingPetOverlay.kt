@@ -46,16 +46,14 @@ fun FloatingPetOverlay(
 ) {
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
-    val screenWidth = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenWidth  = with(density) { configuration.screenWidthDp.dp.toPx() }
     val screenHeight = with(density) { configuration.screenHeightDp.dp.toPx() }
 
-    // Position & drag
     var offsetX by remember { mutableFloatStateOf(screenWidth - 200f) }
     var offsetY by remember { mutableFloatStateOf(screenHeight - 400f) }
     var isDragging by remember { mutableStateOf(false) }
     var wasJustDropped by remember { mutableStateOf(false) }
 
-    // Interaction tracking
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var lastSongTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var recentTapCount by remember { mutableIntStateOf(0) }
@@ -64,12 +62,10 @@ fun FloatingPetOverlay(
     var justFedSnack by remember { mutableStateOf(false) }
     var justGroomed by remember { mutableStateOf(false) }
 
-    // Speech
     var showBubble by remember { mutableStateOf(false) }
     var bubbleText by remember { mutableStateOf("") }
     var currentBehavior by remember { mutableStateOf(PetBehavior.IDLE) }
 
-    // Music tracking
     var wasPlaying by remember { mutableStateOf(false) }
     LaunchedEffect(isPlaying) {
         if (isPlaying && !wasPlaying) {
@@ -83,7 +79,6 @@ fun FloatingPetOverlay(
         wasPlaying = isPlaying
     }
 
-    // Snack/groom effect tracking
     val prevSnacksFed = remember { mutableIntStateOf(petState.snacksFedToday) }
     LaunchedEffect(petState.snacksFedToday) {
         if (petState.snacksFedToday > prevSnacksFed.intValue) {
@@ -100,22 +95,13 @@ fun FloatingPetOverlay(
         prevGroomed.value = petState.groomedToday
     }
 
-    // Reset timers
     LaunchedEffect(isFirstOpenToday) { if (isFirstOpenToday) { delay(4000); isFirstOpenToday = false } }
-    LaunchedEffect(wasJustDropped) { if (wasJustDropped) { delay(600); wasJustDropped = false } }
+    LaunchedEffect(wasJustDropped)   { if (wasJustDropped)   { delay(600);  wasJustDropped = false } }
     LaunchedEffect(recentTapCount) {
-        if (recentTapCount > 0) {
-            petRepository.recordInteraction()
-            delay(4000); recentTapCount = 0
-        }
+        if (recentTapCount > 0) { petRepository.recordInteraction(); delay(4000); recentTapCount = 0 }
     }
+    LaunchedEffect(Unit) { while (true) { delay(30_000); petRepository.decayNeeds() } }
 
-    // Needs decay every 30 seconds
-    LaunchedEffect(Unit) {
-        while (true) { delay(30_000); petRepository.decayNeeds() }
-    }
-
-    // Behavior engine tick
     LaunchedEffect(Unit) {
         while (true) {
             val now = System.currentTimeMillis()
@@ -136,11 +122,9 @@ fun FloatingPetOverlay(
             )
             val newBehavior = PetBehaviorEngine.determineBehavior(context)
             if (newBehavior != currentBehavior) {
-                val text = if (newBehavior == PetBehavior.CRAVING) {
+                val text = if (newBehavior == PetBehavior.CRAVING)
                     GENRE_CRAVINGS.find { it.genre == petState.currentCraving }?.message
-                } else {
-                    PetBehaviorEngine.getBubbleText(newBehavior, petState.name)
-                }
+                else PetBehaviorEngine.getBubbleText(newBehavior, petState.name)
                 if (text != null) { bubbleText = text; showBubble = true }
                 currentBehavior = newBehavior
             }
@@ -150,25 +134,13 @@ fun FloatingPetOverlay(
 
     LaunchedEffect(showBubble) { if (showBubble) { delay(3500); showBubble = false } }
 
-    // Animations
-    val animation = PetBehaviorEngine.behaviorToAnimation(currentBehavior)
-    val landScale by animateFloatAsState(
-        if (wasJustDropped) 1.3f else 1f,
-        spring(dampingRatio = 0.3f, stiffness = 300f), label = "ls"
-    )
-    val landStretch by animateFloatAsState(
-        if (wasJustDropped) 0.7f else 1f,
-        spring(dampingRatio = 0.3f, stiffness = 300f), label = "lst"
-    )
-    val dragRotation by animateFloatAsState(
-        if (isDragging) 15f else 0f,
-        spring(dampingRatio = 0.5f), label = "dr"
-    )
+    val landScale   by animateFloatAsState(if (wasJustDropped) 1.3f else 1f, spring(dampingRatio = 0.3f, stiffness = 300f), label = "ls")
+    val landStretch by animateFloatAsState(if (wasJustDropped) 0.7f else 1f, spring(dampingRatio = 0.3f, stiffness = 300f), label = "lst")
+    val dragRotation by animateFloatAsState(if (isDragging) 15f else 0f, spring(dampingRatio = 0.5f), label = "dr")
 
     val inf = rememberInfiniteTransition(label = "fp")
     val sleepBob by inf.animateFloat(
-        0f,
-        if (currentBehavior == PetBehavior.SLEEPING || currentBehavior == PetBehavior.FALLING_ASLEEP) 4f else 0f,
+        0f, if (currentBehavior == PetBehavior.SLEEPING || currentBehavior == PetBehavior.FALLING_ASLEEP) 4f else 0f,
         infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "sb"
     )
     val celebScale by inf.animateFloat(
@@ -176,25 +148,33 @@ fun FloatingPetOverlay(
         infiniteRepeatable(tween(200), RepeatMode.Reverse), label = "cs"
     )
     val idleSway by inf.animateFloat(
-        -1f, 1f,
-        infiniteRepeatable(tween(3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "is"
+        -1f, 1f, infiniteRepeatable(tween(3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "is"
     )
-    // Snack effect glow
     val effectGlow by inf.animateFloat(
-        0.3f, 0.8f,
-        infiniteRepeatable(tween(500), RepeatMode.Reverse), label = "eg"
+        0.3f, 0.8f, infiniteRepeatable(tween(500), RepeatMode.Reverse), label = "eg"
     )
 
-    // Render
+    // Behaviour → AvatarState mapping (values from PetBehavior enum)
+    val avatarState = when (currentBehavior) {
+        PetBehavior.SLEEPING, PetBehavior.FALLING_ASLEEP,
+        PetBehavior.SLEEPY_NIGHT, PetBehavior.LOW_ENERGY  -> AvatarState.SLEEPY
+        PetBehavior.LISTENING, PetBehavior.HEAD_BOBBING,
+        PetBehavior.DANCING, PetBehavior.SINGING_ALONG,
+        PetBehavior.SPECIAL_DANCE                         -> AvatarState.LISTENING
+        PetBehavior.WORRIED, PetBehavior.COMFORTING,
+        PetBehavior.LONELY, PetBehavior.HUNGRY            -> AvatarState.SAD
+        else                                              -> AvatarState.IDLE
+    }
+
     Box(
         modifier = modifier
             .offset { IntOffset(offsetX.roundToInt(), (offsetY + sleepBob).roundToInt()) }
             .pointerInput(Unit) {
                 detectDragGestures(
-                    onDragStart = { isDragging = true; lastInteractionTime = System.currentTimeMillis(); recentTapCount = 0 },
-                    onDragEnd = { isDragging = false; wasJustDropped = true; lastInteractionTime = System.currentTimeMillis() },
+                    onDragStart  = { isDragging = true; lastInteractionTime = System.currentTimeMillis(); recentTapCount = 0 },
+                    onDragEnd    = { isDragging = false; wasJustDropped = true; lastInteractionTime = System.currentTimeMillis() },
                     onDragCancel = { isDragging = false },
-                    onDrag = { change, dragAmount ->
+                    onDrag       = { change, dragAmount ->
                         change.consume()
                         offsetX = (offsetX + dragAmount.x).coerceIn(0f, screenWidth - 180f)
                         offsetY = (offsetY + dragAmount.y).coerceIn(0f, screenHeight - 250f)
@@ -202,15 +182,10 @@ fun FloatingPetOverlay(
                 )
             }
             .pointerInput(Unit) {
-                detectTapGestures {
-                    recentTapCount++
-                    lastInteractionTime = System.currentTimeMillis()
-                    onTap()
-                }
+                detectTapGestures { recentTapCount++; lastInteractionTime = System.currentTimeMillis(); onTap() }
             }
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            // Speech bubble
             AnimatedVisibility(showBubble, enter = fadeIn() + scaleIn(initialScale = 0.6f), exit = fadeOut() + scaleOut(targetScale = 0.6f)) {
                 Surface(shape = RoundedCornerShape(12.dp), color = Color.White, shadowElevation = 6.dp, modifier = Modifier.padding(bottom = 4.dp)) {
                     Text(bubbleText, Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 150.dp),
@@ -218,17 +193,16 @@ fun FloatingPetOverlay(
                 }
             }
 
-            // Confetti
             if (currentBehavior == PetBehavior.CELEBRATING) CelebrationConfetti()
 
-            // Pet
             Box(
                 modifier = Modifier
                     .size(68.dp)
                     .graphicsLayer {
-                        scaleX = landScale * celebScale; scaleY = landStretch * celebScale
+                        scaleX    = landScale * celebScale
+                        scaleY    = landStretch * celebScale
                         rotationZ = dragRotation + idleSway
-                        alpha = if (currentBehavior == PetBehavior.SLEEPING) 0.7f else 1f
+                        alpha     = if (currentBehavior == PetBehavior.SLEEPING) 0.7f else 1f
                     }
                     .shadow(if (isDragging) 16.dp else 6.dp, CircleShape)
                     .clip(CircleShape)
@@ -238,29 +212,28 @@ fun FloatingPetOverlay(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                // Dusty overlay when cleanliness is low
                 if (petState.cleanliness < 0.3f) {
                     Box(Modifier.fillMaxSize().background(Color(0xFF795548).copy(alpha = 0.2f)))
                 }
 
-                PixelPet(petState = petState, animation = animation, modifier = Modifier.size(58.dp), isPlaying = isPlaying)
+                // LiveAvatar — full layered PNG system, manages its own blink loop
+                LiveAvatar(
+                    petState       = petState,
+                    isMusicPlaying = isPlaying,
+                    equippedIds    = petState.avatarEquippedIds(),
+                    size           = 58.dp,
+                    isDragging     = isDragging
+                )
 
-                // Sparkle effect after grooming
-                if (justGroomed) {
-                    SparkleEffect()
-                }
+                if (justGroomed) SparkleEffect()
             }
 
             Spacer(Modifier.height(2.dp))
-
-            // Mini needs bars
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                MiniBar(petState.energy, Color(0xFFFFB300), 16.dp)
-                MiniBar(petState.cleanliness, Color(0xFF42A5F5), 16.dp)
+                MiniBar(petState.energy,           Color(0xFFFFB300), 16.dp)
+                MiniBar(petState.cleanliness,      Color(0xFF42A5F5), 16.dp)
                 MiniBar(petState.happiness / 100f, Color(0xFFE91E63), 16.dp)
             }
-
-            // Zzz
             if (currentBehavior == PetBehavior.SLEEPING || currentBehavior == PetBehavior.FALLING_ASLEEP) FloatingZzz()
         }
     }
@@ -275,8 +248,7 @@ private fun MiniBar(value: Float, color: Color, width: androidx.compose.ui.unit.
 
 @Composable
 private fun SparkleEffect() {
-    val sparkles = listOf("✨", "⭐", "✨")
-    sparkles.forEachIndexed { i, s ->
+    listOf("✨", "⭐", "✨").forEachIndexed { i, s ->
         val inf = rememberInfiniteTransition(label = "sp_$i")
         val a by inf.animateFloat(1f, 0f, infiniteRepeatable(tween(800 + i * 200), RepeatMode.Restart), label = "sa$i")
         val y by inf.animateFloat(0f, -20f, infiniteRepeatable(tween(800 + i * 200, easing = EaseOut), RepeatMode.Restart), label = "sy$i")

@@ -199,6 +199,17 @@ fun MoodSyncApp(
     val currentTrackId = playerState.currentTrack?.id
     LaunchedEffect(currentTrackId) { if (currentTrackId != null) petRepository.addXP(10) }
 
+    // ── Floating mascot user preference ──────────────────────────────────
+    // Seeded from the "mascot_visible" SharedPreferences key that SettingsScreen writes.
+    // Using mutableStateOf so toggling in Settings takes effect immediately.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var floatingMascotEnabled by remember {
+        mutableStateOf(
+            ctx.getSharedPreferences("moodsync_settings", android.content.Context.MODE_PRIVATE)
+                .getBoolean("mascot_visible", true)
+        )
+    }
+
     // ── Floating pet visibility ───────────────────────────────────────────
     var isMascotWidgetVisible by remember { mutableStateOf(true) }
     val showFloatingPet = when {
@@ -206,8 +217,9 @@ fun MoodSyncApp(
             Screen.WELCOME, Screen.LOGIN, Screen.SIGNUP,
             Screen.NICKNAME, Screen.CONNECT_MUSIC, Screen.RESET
         ) -> false
-        currentScreen == Screen.HOME -> !isMascotWidgetVisible
-        else -> true
+        !floatingMascotEnabled                          -> false
+        currentScreen == Screen.HOME                    -> !isMascotWidgetVisible
+        else                                            -> true
     }
 
     // ── Sign-out helper ───────────────────────────────────────────────────
@@ -313,10 +325,17 @@ fun MoodSyncApp(
             )
 
             Screen.SETTINGS -> SettingsScreen(
-                themeState        = themeState,
-                onBack            = { navigateBack() },
-                onSignOut         = { handleSignOut() },
-                onNavigateToTheme = { navigateTo(Screen.THEME) }
+                themeState              = themeState,
+                themeManager            = themeManager,
+                onBack                  = { navigateBack() },
+                onSignOut               = { handleSignOut() },
+                onNavigateToTheme       = { navigateTo(Screen.THEME) },
+                floatingMascotEnabled   = floatingMascotEnabled,
+                onFloatingMascotToggle  = { enabled ->
+                    floatingMascotEnabled = enabled
+                    ctx.getSharedPreferences("moodsync_settings", android.content.Context.MODE_PRIVATE)
+                        .edit().putBoolean("mascot_visible", enabled).apply()
+                }
             )
 
             Screen.SPOTIFY       -> SpotifyConnectionScreen(spotifyViewModel = spotifyViewModel, onBack = { navigateBack() })

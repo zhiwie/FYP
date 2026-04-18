@@ -106,16 +106,17 @@ fun PetShopScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // Pet sprite
+                    // Pet sprite — layered avatar with accessories
                     Box(
                         Modifier
                             .size(120.dp)
                             .graphicsLayer(scaleX = petScale, scaleY = petScale)
                     ) {
-                        PixelPet(
-                            petState  = petState,
-                            animation = PetAnimation.HAPPY_BOUNCE,
-                            modifier  = Modifier.fillMaxSize()
+                        LiveAvatar(
+                            petState       = petState,
+                            isMusicPlaying = false,
+                            equippedIds    = petState.avatarEquippedIds(),
+                            size           = 120.dp
                         )
                     }
 

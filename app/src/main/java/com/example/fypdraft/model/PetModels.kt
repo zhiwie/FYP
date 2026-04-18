@@ -203,6 +203,12 @@ class PetRepository {
     private val _petState = MutableStateFlow(PetState())
     val petState: StateFlow<PetState> = _petState.asStateFlow()
 
+    // ── Loading gate ──────────────────────────────────────────────────
+    // Starts false; set to true once loadPet() completes (success or error).
+    // The UI should wait for this before rendering avatar-dependent content.
+    private val _petLoaded = MutableStateFlow(false)
+    val petLoaded: StateFlow<Boolean> = _petLoaded.asStateFlow()
+
     private fun userId(): String? = auth.currentUser?.uid
     private fun petDoc() = userId()?.let { firestore.collection("pets").document(it) }
 
@@ -255,15 +261,18 @@ class PetRepository {
                     cravingSatisfied = s.getBoolean("cravingSatisfied") ?: false
                 )
                 _petState.value = checkDailyReset(state)
+                _petLoaded.value = true
                 _petState.value
             } else {
                 val default = PetState()
                 saveFullState(default)
                 _petState.value = default
+                _petLoaded.value = true
                 default
             }
         } catch (e: Exception) {
             Log.e(TAG, "Load failed", e)
+            _petLoaded.value = true   // unblock UI even on error; use defaults
             PetState()
         }
     }
@@ -436,6 +445,33 @@ class PetRepository {
         }
         _petState.value = updated
         saveFullState(updated)
+    }
+
+    /**
+     * Equip a layered-avatar accessory token directly (no ownership check).
+     * Used by the new LayeredAvatarSystem where accessories are PNG overlays,
+     * not items from the legacy ALL_ACCESSORIES list.
+     *
+     * [token]    — "sunglasses" or "tie"
+     * [category] — which slot to write into (GLASSES or NECKLACE)
+     */
+    fun equipLayeredAccessory(token: String, category: AccessoryCategory) {
+        val cur = _petState.value
+        val updated = when (category) {
+            AccessoryCategory.GLASSES  -> cur.copy(equippedGlasses  = token)
+            AccessoryCategory.NECKLACE -> cur.copy(equippedNecklace = token)
+            AccessoryCategory.HAT      -> cur.copy(equippedHat      = token)
+            AccessoryCategory.OUTFIT   -> cur.copy(equippedOutfit   = token)
+        }
+        _petState.value = updated
+        saveMerge(
+            when (category) {
+                AccessoryCategory.GLASSES  -> mapOf("equippedGlasses"  to token)
+                AccessoryCategory.NECKLACE -> mapOf("equippedNecklace" to token)
+                AccessoryCategory.HAT      -> mapOf("equippedHat"      to token)
+                AccessoryCategory.OUTFIT   -> mapOf("equippedOutfit"   to token)
+            }
+        )
     }
 
     // ── Missions ─────────────────────────────────────────────────────

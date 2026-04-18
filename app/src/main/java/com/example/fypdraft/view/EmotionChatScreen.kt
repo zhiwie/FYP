@@ -42,9 +42,7 @@ import java.util.*
 
 private val AccentGreen = Color(0xFF1DB954)
 private val GlassWhite  = Color.White.copy(alpha = 0.08f)
-// User bubble — translucent white (Copilot-style)
 private val UserBubble  = Color.White.copy(alpha = 0.15f)
-// Song card — matches user bubble: glass/translucent white, not dark green
 private val SongCardBg  = Color.White.copy(alpha = 0.12f)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -178,21 +176,26 @@ fun EmotionChatScreen(
                         Text("MoodSync AI", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Text(getBuddyStatusText(petState, typingState), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                     }
+
+                    // ── Top-bar avatar: LayeredAvatar (small, no blink loop needed at this size) ──
                     Box(
                         modifier         = Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        PixelPet(
-                            petState  = petState,
-                            animation = when (typingState) {
-                                TypingState.Thinking         -> PetAnimation.FOCUSED_STARE
-                                TypingState.FindingSongs      -> PetAnimation.LISTENING
-                                TypingState.FilteringResponse -> PetAnimation.DANCING
-                                else                         -> petState.animationForMood()
+                        LayeredAvatar(
+                            species = AvatarSpecies.fromPetType(petState.type),
+                            state   = when (typingState) {
+                                TypingState.Thinking         -> AvatarState.IDLE
+                                TypingState.FindingSongs      -> AvatarState.LISTENING
+                                TypingState.FilteringResponse -> AvatarState.LISTENING
+                                else                         -> AvatarState.IDLE
                             },
-                            modifier = Modifier.size(34.dp)
+                            accessories = petState.avatarEquippedIds()
+                                .mapNotNull { id -> AvatarAccessoryRegistry.all.firstOrNull { it.id == id } },
+                            size = 34.dp
                         )
                     }
+
                     Spacer(Modifier.width(4.dp))
                     if (messages.isNotEmpty()) {
                         IconButton(onClick = { showClearConfirmDialog = true }) {
@@ -303,7 +306,9 @@ private fun formatMessageTime(timestamp: Long): String {
     }
 }
 
-// ── Empty state ───────────────────────────────────────────────────────────
+// ── Empty state — no large avatar, just emoji + text ─────────────────────
+// The big PixelPet in the centre has been removed per spec.
+// The pet's presence is already felt through the top-bar avatar icon.
 
 @Composable
 private fun EmptyChatPlaceholder(
@@ -317,12 +322,8 @@ private fun EmptyChatPlaceholder(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Box(
-            Modifier.size(120.dp).clip(CircleShape).background(AccentGreen.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
-        ) {
-            PixelPet(petState = petState, animation = PetAnimation.HAPPY_BOUNCE, modifier = Modifier.size(100.dp))
-        }
+        // Mood emoji instead of a pet sprite — clean, no PixelPet dependency
+        Text("🎵", fontSize = 56.sp)
         Spacer(Modifier.height(20.dp))
         Text("Hey! I'm ${petState.name}!", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
         Spacer(Modifier.height(4.dp))
@@ -337,10 +338,10 @@ private fun EmptyChatPlaceholder(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { text ->
                         Surface(
-                            shape         = RoundedCornerShape(20.dp),
-                            color         = suggestionBg,
+                            shape           = RoundedCornerShape(20.dp),
+                            color           = suggestionBg,
                             shadowElevation = 8.dp,
-                            modifier      = Modifier.weight(1f).clickable { onSuggestionClick(text) }
+                            modifier        = Modifier.weight(1f).clickable { onSuggestionClick(text) }
                         ) {
                             Text(
                                 text,
@@ -356,6 +357,8 @@ private fun EmptyChatPlaceholder(
 }
 
 // ── Chat bubble ───────────────────────────────────────────────────────────
+// AI messages: small LayeredAvatar circle on the left (profile-style).
+// User messages: no avatar, right-aligned bubble only.
 
 @Composable
 private fun ChatBubble(
@@ -373,11 +376,19 @@ private fun ChatBubble(
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         if (!isUser) {
+            // ── AI avatar: LayeredAvatar profile circle ───────────────────
+            // Static idle state — no auto-blink at this small size (32dp).
             Box(
                 modifier         = Modifier.size(32.dp).clip(CircleShape).background(AccentGreen.copy(alpha = 0.2f)),
                 contentAlignment = Alignment.Center
             ) {
-                PixelPet(petState = petState, animation = PetAnimation.IDLE, modifier = Modifier.size(26.dp))
+                LayeredAvatar(
+                    species     = AvatarSpecies.fromPetType(petState.type),
+                    state       = AvatarState.IDLE,
+                    accessories = petState.avatarEquippedIds()
+                        .mapNotNull { id -> AvatarAccessoryRegistry.all.firstOrNull { it.id == id } },
+                    size        = 26.dp
+                )
             }
             Spacer(Modifier.width(8.dp))
         }
@@ -394,8 +405,8 @@ private fun ChatBubble(
                     ) {
                         Text(
                             message.text,
-                            modifier   = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            color      = Color.White, fontSize = 14.sp, lineHeight = 20.sp
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            color    = Color.White, fontSize = 14.sp, lineHeight = 20.sp
                         )
                     }
                 } else {
@@ -437,33 +448,21 @@ private fun ChatBubble(
     }
 }
 
-// ── Mini song card — glass/translucent, matches user bubble ───────────────
-// Old: Color(0xFF1A2A24) dark opaque green
-// New: SongCardBg (Color.White @ 12% alpha) — same translucent glass family
-//      as UserBubble so the cards feel part of the same chat design language.
+// ── Mini song card ────────────────────────────────────────────────────────
 
 @Composable
 private fun MiniSongCard(song: SongRecommendation, isLoading: Boolean, moodAccent: Color, onClick: () -> Unit) {
     Surface(
-        modifier        = Modifier.width(160.dp).clickable(enabled = !isLoading, onClick = onClick),
-        shape           = RoundedCornerShape(14.dp),
-        // ── glass card — translucent white, not dark green ──────────────
-        color           = SongCardBg,
-        tonalElevation  = 0.dp
+        modifier       = Modifier.width(160.dp).clickable(enabled = !isLoading, onClick = onClick),
+        shape          = RoundedCornerShape(14.dp),
+        color          = SongCardBg,
+        tonalElevation = 0.dp
     ) {
         Column(Modifier.padding(12.dp)) {
-            // Artwork placeholder — gradient uses moodAccent but lighter
             Box(
                 modifier = Modifier
                     .fillMaxWidth().height(80.dp).clip(RoundedCornerShape(10.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                moodAccent.copy(alpha = 0.30f),
-                                Color.White.copy(alpha = 0.06f)
-                            )
-                        )
-                    ),
+                    .background(Brush.linearGradient(listOf(moodAccent.copy(alpha = 0.30f), Color.White.copy(alpha = 0.06f)))),
                 contentAlignment = Alignment.Center
             ) {
                 if (isLoading) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
@@ -477,25 +476,20 @@ private fun MiniSongCard(song: SongRecommendation, isLoading: Boolean, moodAccen
                 Text(song.reason, fontSize = 9.sp, color = moodAccent.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 12.sp)
             }
             Spacer(Modifier.height(6.dp))
-            // Play button — thin outline style to stay light/translucent
             Surface(
                 modifier = Modifier.fillMaxWidth().height(28.dp),
                 shape    = RoundedCornerShape(14.dp),
-                // translucent moodAccent — not fully opaque so it stays in family
                 color    = moodAccent.copy(alpha = 0.65f)
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        if (isLoading) "Loading..." else "▶  Play",
-                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.White
-                    )
+                    Text(if (isLoading) "Loading..." else "▶  Play", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                 }
             }
         }
     }
 }
 
-// ── Buddy typing indicator ────────────────────────────────────────────────
+// ── Typing indicator ──────────────────────────────────────────────────────
 
 @Composable
 private fun BuddyTypingIndicator(typingState: TypingState, petState: PetState) {
@@ -503,19 +497,21 @@ private fun BuddyTypingIndicator(typingState: TypingState, petState: PetState) {
     val bounce by inf.animateFloat(0f, -6f, infiniteRepeatable(tween(400, easing = EaseInOutSine), RepeatMode.Reverse), label = "typeBounce")
 
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Start) {
+        // Small layered avatar bounces while AI is typing
         Box(
             modifier         = Modifier.size(40.dp).offset(y = bounce.dp).clip(CircleShape).background(AccentGreen.copy(alpha = 0.2f)),
             contentAlignment = Alignment.Center
         ) {
-            PixelPet(
-                petState  = petState,
-                animation = when (typingState) {
-                    TypingState.Thinking         -> PetAnimation.FOCUSED_STARE
-                    TypingState.FindingSongs      -> PetAnimation.LISTENING
-                    TypingState.FilteringResponse -> PetAnimation.DANCING
-                    else                         -> PetAnimation.IDLE
+            LayeredAvatar(
+                species = AvatarSpecies.fromPetType(petState.type),
+                state   = when (typingState) {
+                    TypingState.FindingSongs      -> AvatarState.LISTENING
+                    TypingState.FilteringResponse -> AvatarState.LISTENING
+                    else                         -> AvatarState.IDLE
                 },
-                modifier = Modifier.size(34.dp)
+                accessories = petState.avatarEquippedIds()
+                    .mapNotNull { id -> AvatarAccessoryRegistry.all.firstOrNull { it.id == id } },
+                size = 34.dp
             )
         }
         Spacer(Modifier.width(8.dp))
