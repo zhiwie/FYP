@@ -243,17 +243,7 @@ fun AudioVisualizerView(
         val midY = h / 2f
 
         // ── Idle: single flat horizontal line ────────────────────────
-        if (!isPlaying && smoothed.all { it < 0.01f }) {
-            val lineColor = if (barColors.isNotEmpty()) barColors[0].copy(alpha = 0.35f)
-            else Color.White.copy(alpha = 0.35f)
-            drawLine(
-                color       = lineColor,
-                start       = Offset(0f, midY),
-                end         = Offset(w, midY),
-                strokeWidth = 2.dp.toPx(),
-                cap         = StrokeCap.Round
-            )
-            return@Canvas
+        if (!isPlaying && smoothed.all { it < 0.01f }) { return@Canvas
         }
 
         // ── Playing (or decaying to flat): full bar animation ─────────
