@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.example.fypdraft.ui.theme.AppThemeState
 import com.example.fypdraft.ui.theme.animatedMoodBrushLight
 import com.google.firebase.auth.EmailAuthProvider
@@ -119,7 +120,7 @@ fun SettingsScreen(
 
     val isDark        = themeState.isDark
     val primaryText   = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
-    val secondaryText = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
+    val secondaryText = if (isDark) Color(0xFFCCCCDD) else Color(0xFF222233)
     val sheetBg       = if (isDark) Color(0xFF1C1C2E) else Color.White
     val cardBg        = if (isDark) Color(0xFF242438) else Color(0xFFF8F8FC)
     val dividerColor  = if (isDark) Color(0xFF2A2A3A) else Color(0xFFE8E8F0)
@@ -592,6 +593,23 @@ private fun QuickTileButton(
 // Account & Privacy Sheet (unchanged from before — full profile + password)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Consistent OutlinedTextField colours that stay readable in both themes. */
+@Composable
+private fun outlinedFieldColors(textColor: Color, subColor: Color) =
+    OutlinedTextFieldDefaults.colors(
+        focusedTextColor        = textColor,
+        unfocusedTextColor      = textColor,
+        disabledTextColor       = subColor,
+        focusedBorderColor      = Color(0xFF5C6BC0),
+        unfocusedBorderColor    = subColor,
+        disabledBorderColor     = subColor.copy(alpha = 0.4f),
+        focusedLabelColor       = Color(0xFF5C6BC0),
+        unfocusedLabelColor     = subColor,
+        focusedContainerColor   = Color.Transparent,
+        unfocusedContainerColor = Color.Transparent,
+        disabledContainerColor  = Color.Transparent
+    )
+
 @Composable
 private fun AccountPrivacySheet(
     username: String, email: String, isDark: Boolean,
@@ -602,7 +620,7 @@ private fun AccountPrivacySheet(
     val ctx   = LocalContext.current
 
     val textColor = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
-    val subColor  = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
+    val subColor  = if (isDark) Color(0xFFDDDDEE) else Color(0xFF111122)
     val divColor  = if (isDark) Color(0xFF2A2A3A) else Color(0xFFE8E8F0)
 
     var editUsername by remember { mutableStateOf(username) }
@@ -635,7 +653,8 @@ private fun AccountPrivacySheet(
             modifier      = Modifier.fillMaxWidth(),
             singleLine    = true,
             shape         = RoundedCornerShape(12.dp),
-            placeholder   = { Text("Your username") }
+            placeholder   = { Text("Your username", color = subColor) },
+            colors        = outlinedFieldColors(textColor, subColor)
         )
         Spacer(Modifier.height(12.dp))
         Text("Email", fontSize = 13.sp, color = subColor, fontWeight = FontWeight.SemiBold)
@@ -646,7 +665,8 @@ private fun AccountPrivacySheet(
             enabled       = false,
             modifier      = Modifier.fillMaxWidth(),
             singleLine    = true,
-            shape         = RoundedCornerShape(12.dp)
+            shape         = RoundedCornerShape(12.dp),
+            colors        = outlinedFieldColors(textColor, subColor)
         )
 
         // ── Social Privacy ────────────────────────────────────────────
@@ -695,36 +715,39 @@ private fun AccountPrivacySheet(
         OutlinedTextField(
             value                = currentPw,
             onValueChange        = { currentPw = it },
-            label                = { Text("Current password") },
+            label                = { Text("Current password", color = subColor) },
             visualTransformation = if (showPw) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon         = {
                 IconButton(onClick = { showPw = !showPw }) {
-                    Icon(if (showPw) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Toggle")
+                    Icon(if (showPw) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Toggle", tint = subColor)
                 }
             },
             modifier   = Modifier.fillMaxWidth(),
             singleLine = true,
-            shape      = RoundedCornerShape(12.dp)
+            shape      = RoundedCornerShape(12.dp),
+            colors     = outlinedFieldColors(textColor, subColor)
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value                = newPw,
             onValueChange        = { newPw = it },
-            label                = { Text("New password") },
+            label                = { Text("New password", color = subColor) },
             visualTransformation = PasswordVisualTransformation(),
             modifier             = Modifier.fillMaxWidth(),
             singleLine           = true,
-            shape                = RoundedCornerShape(12.dp)
+            shape                = RoundedCornerShape(12.dp),
+            colors               = outlinedFieldColors(textColor, subColor)
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value                = confirmPw,
             onValueChange        = { confirmPw = it },
-            label                = { Text("Confirm new password") },
+            label                = { Text("Confirm new password", color = subColor) },
             visualTransformation = PasswordVisualTransformation(),
             modifier             = Modifier.fillMaxWidth(),
             singleLine           = true,
-            shape                = RoundedCornerShape(12.dp)
+            shape                = RoundedCornerShape(12.dp),
+            colors               = outlinedFieldColors(textColor, subColor)
         )
 
         if (message != null) {
@@ -792,7 +815,7 @@ private fun AccountPrivacySheet(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Support ticket dialog (inline AlertDialog version)
+// Support ticket dialog — custom Dialog+Card so colours match the app theme
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -808,81 +831,137 @@ private fun SupportTicketDialog(
     var isSubmitted by remember { mutableStateOf(false) }
     var errorMsg    by remember { mutableStateOf<String?>(null) }
 
-    val subColor = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
+    val bgColor   = if (isDark) Color(0xFF1C1C2E) else Color.White
+    val textColor = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val subColor  = if (isDark) Color(0xFFDDDDEE) else Color(0xFF111122)
+    val accentColor = Color(0xFF00897B)
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon  = { Text("🎧", fontSize = 32.sp) },
-        title = { Text(if (isSubmitted) "Ticket Sent!" else "Send Support Ticket", fontWeight = FontWeight.Bold) },
-        text  = {
-            if (isSubmitted) {
-                Text("We've received your message and will get back to you shortly.", fontSize = 14.sp)
-            } else {
-                Column {
-                    Text("Describe your issue below:", fontSize = 13.sp, color = subColor)
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape     = RoundedCornerShape(24.dp),
+            colors    = CardDefaults.cardColors(containerColor = bgColor),
+            elevation = CardDefaults.cardElevation(20.dp),
+            modifier  = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight()
+        ) {
+            Column(
+                modifier            = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("🎧", fontSize = 36.sp)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    if (isSubmitted) "Ticket Sent!" else "Send Support Ticket",
+                    fontSize   = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color      = textColor
+                )
+                Spacer(Modifier.height(12.dp))
+
+                if (isSubmitted) {
+                    Text(
+                        "We've received your message and will get back to you shortly.",
+                        fontSize = 14.sp,
+                        color    = subColor,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick  = onDismiss,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape    = RoundedCornerShape(14.dp),
+                        colors   = ButtonDefaults.buttonColors(containerColor = accentColor)
+                    ) { Text("Done", color = Color.White, fontWeight = FontWeight.Bold) }
+                } else {
+                    Text(
+                        "Describe your issue below:",
+                        fontSize = 13.sp,
+                        color    = subColor,
+                        modifier = Modifier.align(Alignment.Start)
+                    )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value         = description,
                         onValueChange = { if (it.length <= 500) description = it },
                         placeholder   = { Text("Describe your issue…", color = subColor) },
-                        modifier      = Modifier.fillMaxWidth().height(120.dp),
+                        modifier      = Modifier.fillMaxWidth().height(130.dp),
                         maxLines      = 6,
-                        shape         = RoundedCornerShape(12.dp)
+                        shape         = RoundedCornerShape(12.dp),
+                        colors        = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor        = textColor,
+                            unfocusedTextColor      = textColor,
+                            focusedBorderColor      = accentColor,
+                            unfocusedBorderColor    = subColor.copy(alpha = 0.5f),
+                            focusedLabelColor       = accentColor,
+                            unfocusedLabelColor     = subColor,
+                            focusedContainerColor   = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            cursorColor             = accentColor
+                        )
                     )
                     Text(
                         "${description.length}/500",
-                        fontSize = 11.sp, color = subColor,
+                        fontSize = 11.sp,
+                        color    = subColor,
                         modifier = Modifier.align(Alignment.End).padding(top = 2.dp)
                     )
+
                     if (errorMsg != null) {
                         Spacer(Modifier.height(8.dp))
-                        Text(errorMsg!!, color = Color(0xFFE53935), fontSize = 12.sp)
+                        Text(errorMsg!!, color = Color(0xFFE57373), fontSize = 12.sp)
                     }
-                }
-            }
-        },
-        confirmButton = {
-            if (isSubmitted) {
-                TextButton(onClick = onDismiss) { Text("Done", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
-            } else {
-                Button(
-                    onClick = {
-                        if (description.isBlank()) { errorMsg = "Please describe your issue."; return@Button }
-                        errorMsg = null; isSending = true
-                        scope.launch {
-                            try {
-                                val payload = JSONObject().apply {
-                                    put("name",       userName.ifBlank { "MoodSync User" })
-                                    put("email",      userEmail)
-                                    put("category",   "Bug Report")
-                                    put("subject",    "Support Request")
-                                    put("message",    description)
-                                    put("appVersion", "1.0.0")
-                                }
-                                val result = postTicket(payload)
-                                if (result.optBoolean("ok", false)) isSubmitted = true
-                                else errorMsg = result.optString("error", "Submission failed. Please try again.")
-                            } catch (e: Exception) {
-                                errorMsg = "Network error: ${e.message ?: "Check your connection."}"
-                            }
-                            isSending = false
+
+                    Spacer(Modifier.height(16.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TextButton(
+                            onClick  = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Cancel", color = subColor, fontWeight = FontWeight.SemiBold)
                         }
-                    },
-                    enabled = !isSending,
-                    colors  = ButtonDefaults.buttonColors(containerColor = Color(0xFF00897B))
-                ) {
-                    if (isSending) {
-                        CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (description.isBlank()) { errorMsg = "Please describe your issue."; return@Button }
+                                errorMsg = null; isSending = true
+                                scope.launch {
+                                    try {
+                                        val payload = JSONObject().apply {
+                                            put("name",       userName.ifBlank { "MoodSync User" })
+                                            put("email",      userEmail)
+                                            put("category",   "Bug Report")
+                                            put("subject",    "Support Request")
+                                            put("message",    description)
+                                            put("appVersion", "1.0.0")
+                                        }
+                                        val result = postTicket(payload)
+                                        if (result.optBoolean("ok", false)) isSubmitted = true
+                                        else errorMsg = result.optString("error", "Submission failed. Please try again.")
+                                    } catch (e: Exception) {
+                                        errorMsg = "Network error: ${e.message ?: "Check your connection."}"
+                                    }
+                                    isSending = false
+                                }
+                            },
+                            enabled  = !isSending,
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape    = RoundedCornerShape(14.dp),
+                            colors   = ButtonDefaults.buttonColors(containerColor = accentColor)
+                        ) {
+                            if (isSending) {
+                                CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(if (isSending) "Sending…" else "Send", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
                     }
-                    Text(if (isSending) "Sending…" else "Send", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
-        },
-        dismissButton = {
-            if (!isSubmitted) TextButton(onClick = onDismiss) { Text("Cancel", color = MaterialTheme.colorScheme.primary) }
         }
-    )
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

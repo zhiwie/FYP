@@ -14,6 +14,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -163,18 +164,14 @@ fun AudioVisualizerView(
     // ── Update smoothed values + particles ───────────────────────────
     LaunchedEffect(frameTick, isPlaying) {
         if (!isPlaying) {
-            // Idle breathing — very gentle pulse
-            val idle = FloatArray(BAR_COUNT) { i ->
-                val base = 0.08f + 0.06f * sin(simPhase * 0.3f + i * 0.4f)
-                base.coerceIn(0f, 0.2f)
-            }
+            // Idle: collapse all bars to zero → flat horizontal line
             smoothed = FloatArray(BAR_COUNT) { i ->
-                smoothed[i] + (idle[i] - smoothed[i]) * 0.08f
+                smoothed[i] + (0f - smoothed[i]) * 0.15f   // smooth decay to flat
             }
-            peaks = FloatArray(BAR_COUNT) { i -> peaks[i] * 0.98f }
-            energy = energy * 0.9f
+            peaks    = FloatArray(BAR_COUNT) { 0f }
+            energy   = 0f
             particles = particles.mapNotNull { p ->
-                p.life -= 0.05f; p.alpha = p.life.coerceIn(0f, 1f) * 0.5f
+                p.life -= 0.08f; p.alpha = p.life.coerceIn(0f, 1f) * 0.5f
                 if (p.life > 0f) p else null
             }.toMutableList()
             return@LaunchedEffect
@@ -243,41 +240,57 @@ fun AudioVisualizerView(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val barWidth = w / (BAR_COUNT * 1.8f)
+        val midY = h / 2f
+
+        // ── Idle: single flat horizontal line ────────────────────────
+        if (!isPlaying && smoothed.all { it < 0.01f }) {
+            val lineColor = if (barColors.isNotEmpty()) barColors[0].copy(alpha = 0.35f)
+            else Color.White.copy(alpha = 0.35f)
+            drawLine(
+                color       = lineColor,
+                start       = Offset(0f, midY),
+                end         = Offset(w, midY),
+                strokeWidth = 2.dp.toPx(),
+                cap         = StrokeCap.Round
+            )
+            return@Canvas
+        }
+
+        // ── Playing (or decaying to flat): full bar animation ─────────
+        val barWidth      = w / (BAR_COUNT * 1.8f)
         val totalBarsWidth = BAR_COUNT * barWidth + (BAR_COUNT - 1) * barWidth * 0.8f
-        val startX = (w - totalBarsWidth) / 2
-        val gap = barWidth * 0.8f
+        val startX        = (w - totalBarsWidth) / 2
+        val gap           = barWidth * 0.8f
 
         for (i in 0 until BAR_COUNT) {
-            val barH = smoothed[i] * h * 0.85f
-            val x = startX + i * (barWidth + gap)
-            val top = h - barH
-            val colorIdx = i % barColors.size
-            val color = barColors[colorIdx]
+            val barH   = smoothed[i] * h * 0.85f
+            val x      = startX + i * (barWidth + gap)
+            val top    = h - barH
+            val color  = barColors[i % barColors.size]
 
             // Glow
             if (smoothed[i] > 0.2f) {
                 drawRoundRect(
-                    color = color.copy(alpha = smoothed[i] * 0.15f),
-                    topLeft = Offset(x - 1.5f, top - 1.5f),
-                    size = Size(barWidth + 3f, barH + 3f),
+                    color        = color.copy(alpha = smoothed[i] * 0.15f),
+                    topLeft      = Offset(x - 1.5f, top - 1.5f),
+                    size         = Size(barWidth + 3f, barH + 3f),
                     cornerRadius = CornerRadius(barWidth / 2)
                 )
             }
 
             // Bar
             drawRoundRect(
-                color = color.copy(alpha = 0.4f + smoothed[i] * 0.4f),
-                topLeft = Offset(x, top),
-                size = Size(barWidth, barH),
+                color        = color.copy(alpha = 0.4f + smoothed[i] * 0.4f),
+                topLeft      = Offset(x, top),
+                size         = Size(barWidth, barH.coerceAtLeast(2.dp.toPx())),
                 cornerRadius = CornerRadius(barWidth / 2)
             )
 
-            // Peak dot
-            if (peaks[i] > 0.08f && isPlaying) {
+            // Peak dot (only while music is actually playing)
+            if (isPlaying && peaks[i] > 0.08f) {
                 val peakY = h - peaks[i] * h * 0.85f - 3f
                 drawCircle(
-                    color = Color.White.copy(alpha = 0.7f),
+                    color  = Color.White.copy(alpha = 0.7f),
                     radius = barWidth / 3f,
                     center = Offset(x + barWidth / 2, peakY)
                 )
@@ -286,7 +299,7 @@ fun AudioVisualizerView(
 
         // Particles
         for (p in particles) {
-            val px = p.x * w; val py = p.y * h
+            val px    = p.x * w; val py = p.y * h
             val color = if (p.colorIndex < barColors.size) barColors[p.colorIndex] else barColors[0]
             drawCircle(color.copy(alpha = p.alpha * 0.3f), p.radius * 2f, Offset(px, py))
             drawCircle(color.copy(alpha = p.alpha), p.radius, Offset(px, py))

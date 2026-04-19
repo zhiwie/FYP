@@ -370,12 +370,24 @@ fun MoodSyncApp(
             }
         }
 
+        // ── Floating pet: tap opens the Customise buddy sheet ─────────────
+        var showPetCustomise by remember { mutableStateOf(false) }
+
         if (showFloatingPet) {
             SmartFloatingPet(
                 petState      = petState,
                 petRepository = petRepository,
                 isPlaying     = isPlaying,
-                onTap         = { navigateTo(Screen.PET_SHOP) }
+                onTap         = { showPetCustomise = true }
+            )
+        }
+
+        if (showPetCustomise) {
+            PetCustomiseSheet(
+                petState      = petState,
+                petRepository = petRepository,
+                onDismiss     = { showPetCustomise = false },
+                onVisitShop   = { showPetCustomise = false; navigateTo(Screen.PET_SHOP) }
             )
         }
     }
