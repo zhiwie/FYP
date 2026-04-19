@@ -471,17 +471,6 @@ fun PetCustomiseSheet(
                                 }
                                 Spacer(Modifier.height(12.dp))
                             }
-
-                            Spacer(Modifier.height(8.dp)); HorizontalDivider(); Spacer(Modifier.height(12.dp))
-                            OutlinedButton(
-                                onClick  = onVisitShop,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape    = RoundedCornerShape(14.dp)
-                            ) {
-                                Icon(Icons.Filled.Store, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("Visit Pet Shop", fontWeight = FontWeight.Bold)
-                            }
                         }
 
                         // ── Tab 1: Accessories (layered system) ───────────

@@ -208,7 +208,16 @@ fun FriendsScreen(
                         if (friends.isNotEmpty()) Text("$onlineCount listening now", fontSize = 12.sp, color = secondaryText)
                     }
                     Spacer(Modifier.weight(1f))
-                    IconButton(onClick = { showAddDialog = true }) { Icon(Icons.Filled.PersonAdd, "Add Friend", tint = primaryText) }
+                    IconButton(
+                        onClick = { showAddDialog = true }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.PersonAdd,
+                            contentDescription = "Add Friend",
+                            tint = primaryText,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
                 }
 
                 if (isLoading) {
@@ -278,7 +287,7 @@ fun FriendsScreen(
                         }
 
                         if (friends.isEmpty()) {
-                            item(key = "empty_state") { EmptyFriendsState(primaryText = primaryText, secondaryText = secondaryText, onAdd = { showAddDialog = true }) }
+                            item(key = "empty_state") { EmptyFriendsState(primaryText = primaryText, secondaryText = secondaryText, isDark = isDark, onAdd = { showAddDialog = true }) }
                         }
 
                         item(key = "bottom_spacer") { Spacer(Modifier.height(16.dp)) }
@@ -348,7 +357,7 @@ fun FriendsScreen(
 
     if (showAddDialog) {
         AddFriendDialog(
-            socialRepo = socialRepo, error = addError,
+            socialRepo = socialRepo, error = addError, isDark = isDark,
             onDismiss  = { showAddDialog = false; addError = null },
             onScanQr   = { showAddDialog = false; showQrScanner = true },
             onShowMyQr = { showAddDialog = false; showQrDialog = true },
@@ -849,7 +858,8 @@ private fun SongMessageBubble(msg: FriendChatMessage) {
 
 @Composable
 private fun AddFriendDialog(
-    socialRepo: SocialRepository, error: String?, onDismiss: () -> Unit, onAdd: (String) -> Unit,
+    socialRepo: SocialRepository, error: String?, isDark: Boolean,
+    onDismiss: () -> Unit, onAdd: (String) -> Unit,
     onAddByUid: (String) -> Unit, onScanQr: () -> Unit, onShowMyQr: () -> Unit = {}
 ) {
     var username    by remember { mutableStateOf("") }
@@ -857,48 +867,170 @@ private fun AddFriendDialog(
     var loadingSugg by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { loadingSugg = true; suggestions = socialRepo.getMutualFriendSuggestions(); loadingSugg = false }
 
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Add a Friend", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(Modifier.fillMaxWidth()) {
-                Button(onClick = onScanQr, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1DB954))) {
-                    Icon(Icons.Filled.QrCode, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Scan a Friend's QR Code", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+    val bgColor   = if (isDark) Color(0xFF1C1C2E) else Color.White
+    val textColor = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val subColor  = if (isDark) Color(0xFFDDDDEE) else Color(0xFF111122)
+    val fieldBorderUnfocused = if (isDark) Color(0xFF3A3A5A) else Color(0xFFCCCCCC)
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape     = RoundedCornerShape(24.dp),
+            colors    = CardDefaults.cardColors(containerColor = bgColor),
+            elevation = CardDefaults.cardElevation(20.dp),
+            modifier  = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Header
+                Text(
+                    "Add a Friend",
+                    fontWeight = FontWeight.Bold,
+                    fontSize   = 18.sp,
+                    color      = textColor
+                )
+                Spacer(Modifier.height(16.dp))
+
+                // Scan QR button
+                Button(
+                    onClick  = onScanQr,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape    = RoundedCornerShape(14.dp),
+                    colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFF1DB954), contentColor = Color.White)
+                ) {
+                    Icon(Icons.Filled.QrCode, null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Scan a Friend's QR Code", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onShowMyQr, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1A1A2E))) {
-                    Icon(Icons.Filled.QrCode, null, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Show My QR Code", fontSize = 13.sp)
+
+                // Show My QR Code button
+                OutlinedButton(
+                    onClick  = onShowMyQr,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape    = RoundedCornerShape(14.dp),
+                    colors   = ButtonDefaults.outlinedButtonColors(contentColor = textColor),
+                    border   = androidx.compose.foundation.BorderStroke(1.dp, subColor.copy(alpha = 0.5f))
+                ) {
+                    Icon(Icons.Filled.QrCode, null, modifier = Modifier.size(16.dp), tint = textColor)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Show My QR Code", fontSize = 13.sp, color = textColor)
                 }
-                Spacer(Modifier.height(16.dp)); HorizontalDivider(); Spacer(Modifier.height(12.dp))
-                Text("Or search by username", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF666677)); Spacer(Modifier.height(8.dp))
-                OutlinedTextField(value = username, onValueChange = { username = it }, placeholder = { Text("Enter exact username (lowercase)") },
-                    singleLine = true, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), leadingIcon = { Icon(Icons.Filled.Search, null) },
-                    supportingText = { Text("Usernames are lowercase — e.g. \"johndoe\" not \"JohnDoe\"", fontSize = 11.sp, color = Color(0xFF888888)) },
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF1DB954)))
-                if (error != null) { Spacer(Modifier.height(4.dp)); Text(error, color = Color.Red, fontSize = 12.sp) }
+
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider(color = subColor.copy(alpha = 0.2f))
+                Spacer(Modifier.height(12.dp))
+
+                Text("Or search by username", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = subColor)
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value         = username,
+                    onValueChange = { username = it },
+                    placeholder   = { Text("Enter exact username", color = subColor) },
+                    singleLine    = true,
+                    shape         = RoundedCornerShape(12.dp),
+                    modifier      = Modifier.fillMaxWidth(),
+                    leadingIcon   = { Icon(Icons.Filled.Search, null, tint = subColor) },
+                    supportingText = {
+                        Text(
+                            "Usernames are lowercase — e.g. \"johndoe\" not \"JohnDoe\"",
+                            fontSize = 11.sp,
+                            color    = subColor
+                        )
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor        = textColor,
+                        unfocusedTextColor      = textColor,
+                        focusedBorderColor      = Color(0xFF1DB954),
+                        unfocusedBorderColor    = fieldBorderUnfocused,
+                        focusedLabelColor       = Color(0xFF1DB954),
+                        unfocusedLabelColor     = subColor,
+                        focusedContainerColor   = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        cursorColor             = Color(0xFF1DB954)
+                    )
+                )
+
+                if (error != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(error, color = Color(0xFFE57373), fontSize = 12.sp)
+                }
+
                 if (suggestions.isNotEmpty() || loadingSugg) {
-                    Spacer(Modifier.height(16.dp)); Text("People you might know", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF666677)); Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(16.dp))
+                    Text("People you might know", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = subColor)
+                    Spacer(Modifier.height(8.dp))
                     when {
-                        loadingSugg -> Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), color = Color(0xFF1DB954)) }
-                        else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { suggestions.take(5).forEach { sug -> SuggestionRow(suggestion = sug, onAdd = { onAddByUid(sug.uid) }) } }
+                        loadingSugg -> Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(Modifier.size(24.dp), color = Color(0xFF1DB954))
+                        }
+                        else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            suggestions.take(5).forEach { sug ->
+                                SuggestionRow(suggestion = sug, isDark = isDark, textColor = textColor, onAdd = { onAddByUid(sug.uid) })
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // Action row
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick  = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Cancel", color = subColor, fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick  = { if (username.isNotBlank()) onAdd(username.trim().lowercase()) },
+                        enabled  = username.isNotBlank(),
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape    = RoundedCornerShape(14.dp),
+                        colors   = ButtonDefaults.buttonColors(
+                            containerColor         = Color(0xFF1DB954),
+                            contentColor           = Color.White,
+                            disabledContainerColor = Color(0xFF1DB954).copy(alpha = 0.35f),
+                            disabledContentColor   = Color.White.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Text("Add Friend", fontWeight = FontWeight.Bold)
                     }
                 }
             }
-        },
-        confirmButton = { Button(onClick = { if (username.isNotBlank()) onAdd(username.trim().lowercase()) }, enabled = username.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A2E))) { Text("Add Friend") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
+        }
+    }
 }
 
 @Composable
-private fun SuggestionRow(suggestion: FriendSuggestion, onAdd: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5FA)).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(38.dp).clip(CircleShape).background(Color(0xFF1DB954).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) { Text(petTypeToEmoji(suggestion.mascotType), fontSize = 20.sp) }
+private fun SuggestionRow(suggestion: FriendSuggestion, isDark: Boolean = false, textColor: Color = Color(0xFF1A1A2E), onAdd: () -> Unit) {
+    val rowBg    = if (isDark) Color(0xFF2A2A3E) else Color(0xFFF5F5FA)
+    val subColor = if (isDark) Color(0xFFBBBBCC) else Color(0xFF555566)
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(rowBg)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(38.dp).clip(CircleShape).background(Color(0xFF1DB954).copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+            Text(petTypeToEmoji(suggestion.mascotType), fontSize = 20.sp)
+        }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(suggestion.displayName, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFF1A1A2E))
-            val reason = when { suggestion.matchedByPhone && suggestion.mutualFriendCount > 0 -> "📱 In your contacts · ${suggestion.mutualFriendCount} mutual"; suggestion.matchedByPhone -> "📱 In your contacts"; suggestion.mutualFriendCount > 0 -> "${suggestion.mutualFriendCount} mutual friend${if (suggestion.mutualFriendCount > 1) "s" else ""}"; else -> "You might know this person" }
-            Text(reason, fontSize = 11.sp, color = Color(0xFF666677))
+            Text(suggestion.displayName, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = textColor)
+            val reason = when {
+                suggestion.matchedByPhone && suggestion.mutualFriendCount > 0 -> "📱 In your contacts · ${suggestion.mutualFriendCount} mutual"
+                suggestion.matchedByPhone  -> "📱 In your contacts"
+                suggestion.mutualFriendCount > 0 -> "${suggestion.mutualFriendCount} mutual friend${if (suggestion.mutualFriendCount > 1) "s" else ""}"
+                else -> "You might know this person"
+            }
+            Text(reason, fontSize = 11.sp, color = subColor)
         }
-        TextButton(onClick = onAdd, colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1DB954)), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Add", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+        TextButton(onClick = onAdd, colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1DB954)), contentPadding = PaddingValues(horizontal = 8.dp)) {
+            Text("Add", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        }
     }
 }
 
@@ -1037,13 +1169,30 @@ private fun EditProfileDialog(currentName: String, isDark: Boolean, onDismiss: (
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun EmptyFriendsState(primaryText: Color = Color(0xFF1A1A2E), secondaryText: Color = Color(0xFF666677), onAdd: () -> Unit) {
+private fun EmptyFriendsState(
+    primaryText: Color = Color(0xFF1A1A2E),
+    secondaryText: Color = Color(0xFF666677),
+    isDark: Boolean = false,
+    onAdd: () -> Unit
+) {
     Column(Modifier.fillMaxWidth().padding(vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("🐱", "🐶", "🐻", "🐰").forEach { Text(it, fontSize = 36.sp) } }
-        Spacer(Modifier.height(16.dp)); Text("No friends yet", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = primaryText); Spacer(Modifier.height(8.dp))
-        Text("Add friends to share music vibes!", fontSize = 14.sp, color = secondaryText, textAlign = TextAlign.Center); Spacer(Modifier.height(24.dp))
-        Button(onClick = onAdd, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A2E)), shape = RoundedCornerShape(20.dp)) {
-            Icon(Icons.Filled.PersonAdd, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Add a friend")
+//        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("🐱", "🐶", "🐻", "🐰").forEach { Text(it, fontSize = 36.sp) } }
+        Spacer(Modifier.height(16.dp))
+        Text("No friends yet", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = primaryText)
+        Spacer(Modifier.height(8.dp))
+        Text("Add friends to share music vibes!", fontSize = 14.sp, color = secondaryText, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(24.dp))
+        Button(
+            onClick = onAdd,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF1DB954),
+                contentColor   = Color.White
+            ),
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Icon(Icons.Filled.PersonAdd, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Add a friend", fontWeight = FontWeight.SemiBold)
         }
     }
 }

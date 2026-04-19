@@ -468,7 +468,7 @@ fun SettingsScreen(
         var cleared by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            icon  = { Text("🧹", fontSize = 32.sp) },
+//            icon  = { Text("🧹", fontSize = 32.sp) },
             title = { Text(if (cleared) "Cache Cleared!" else "Clear Cache?") },
             text  = {
                 Text(
@@ -849,8 +849,8 @@ private fun SupportTicketDialog(
                 modifier            = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("🎧", fontSize = 36.sp)
-                Spacer(Modifier.height(8.dp))
+//                Text("🎧", fontSize = 36.sp)
+//                Spacer(Modifier.height(8.dp))
                 Text(
                     if (isSubmitted) "Ticket Sent!" else "Send Support Ticket",
                     fontSize   = 18.sp,
