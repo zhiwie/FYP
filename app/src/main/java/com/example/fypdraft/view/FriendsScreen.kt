@@ -215,7 +215,7 @@ fun FriendsScreen(
                             imageVector = Icons.Filled.PersonAdd,
                             contentDescription = "Add Friend",
                             tint = primaryText,
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(40.dp)
                         )
                     }
                 }

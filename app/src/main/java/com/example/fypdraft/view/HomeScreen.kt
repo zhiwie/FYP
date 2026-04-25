@@ -26,12 +26,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.example.fypdraft.data.repository.DailyMood
 import com.example.fypdraft.data.repository.MoodHistoryRepository
 import com.example.fypdraft.data.repository.SpotifyMusicRepository
 import com.example.fypdraft.data.repository.SpotifyRepository
@@ -46,6 +49,7 @@ import com.example.fypdraft.model.PetRepository
 import com.example.fypdraft.model.Track
 import com.example.fypdraft.ui.theme.AppThemeState
 import com.example.fypdraft.ui.theme.animatedMoodBrushLight
+import com.example.fypdraft.viewmodel.MoodCheckInViewModel
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.async
@@ -116,9 +120,9 @@ private fun getReasonsForSection(
     )
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// HomeScreen
-// ─────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  HomeScreen
+// ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,10 +133,8 @@ fun HomeScreen(
     petRepository: PetRepository? = null,
     themeState: AppThemeState = AppThemeState(),
     isPlayingMusic: Boolean = false,
-    // ── Mood persistence — owned by MoodSyncApp (root), passed down ───────
     savedMoodKey: String? = null,
     onMoodSelected: (String) -> Unit = {},
-    // ─────────────────────────────────────────────────────────────────────
     onNavigateToSearch: () -> Unit = {},
     onNavigateToFriends: () -> Unit = {},
     onNavigateToLibrary: () -> Unit = {},
@@ -149,6 +151,7 @@ fun HomeScreen(
     val scope       = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scrollState = rememberScrollState()
+    val context     = LocalContext.current
 
     val currentUser    = FirebaseAuth.getInstance().currentUser
     val rawDisplayName = currentUser?.displayName
@@ -177,28 +180,20 @@ fun HomeScreen(
     var loadError by remember { mutableStateOf<String?>(null) }
     var hasLoaded by remember { mutableStateOf(false) }
 
-    // ── mascotMood: derive from savedMoodKey (root state) or auto-detect ─
-    // savedMoodKey is now owned by MoodSyncApp and survives ALL navigation.
     var mascotMood by remember {
         val initial = if (savedMoodKey != null)
             MascotMoodDetector.getMoodForKey(savedMoodKey).copy(isUserOverride = true)
-        else
-            MascotMoodDetector.detectMood()
+        else MascotMoodDetector.detectMood()
         mutableStateOf(initial)
     }
-
-    // Keep mascotMood in sync if savedMoodKey changes externally
-    // (e.g. first composition after returning from another screen)
     LaunchedEffect(savedMoodKey) {
         val key = savedMoodKey
-        if (key != null && (!mascotMood.isUserOverride || mascotMood.mood != key)) {
+        if (key != null && (!mascotMood.isUserOverride || mascotMood.mood != key))
             mascotMood = MascotMoodDetector.getMoodForKey(key).copy(isUserOverride = true)
-        }
     }
 
     var chatMessage    by remember { mutableStateOf<String?>(null) }
     var showMoodPicker by remember { mutableStateOf(false) }
-
     var explainTrack        by remember { mutableStateOf<Track?>(null) }
     var explainSectionTitle by remember { mutableStateOf("") }
     var explainSectionEmoji by remember { mutableStateOf("") }
@@ -209,10 +204,15 @@ fun HomeScreen(
     var recentArtists      by remember { mutableStateOf(listOf<String>()) }
     var listenStreakMinutes by remember { mutableIntStateOf(0) }
 
-    var mascotWidgetBottomY by remember { mutableFloatStateOf(0f) }
-    val scrollOffset        = scrollState.value
-    val isMascotVisible     = remember(mascotWidgetBottomY, scrollOffset) { mascotWidgetBottomY > scrollOffset }
-    LaunchedEffect(isMascotVisible) { onMascotVisibilityChanged(isMascotVisible) }
+    // Track when the hub card scrolls off-screen
+    var hubCardBottomY  by remember { mutableFloatStateOf(0f) }
+    val scrollOffset    = scrollState.value
+    val isHubVisible    = remember(hubCardBottomY, scrollOffset) { hubCardBottomY > scrollOffset }
+    LaunchedEffect(isHubVisible) { onMascotVisibilityChanged(isHubVisible) }
+
+    // Daily check-in
+    val checkInVm: MoodCheckInViewModel = viewModel(factory = MoodCheckInViewModel.factory(context))
+    val checkInState by checkInVm.state.collectAsState()
 
     LaunchedEffect(Unit) { localPetRepo.loadPet() }
     LaunchedEffect(Unit) { personalityEngine.loadOrCompute() }
@@ -235,10 +235,8 @@ fun HomeScreen(
     val passiveMood       by passiveMoodDetector.detectedMood.collectAsState()
     val passiveConfidence by passiveMoodDetector.confidence.collectAsState()
 
-    // ── Passive detection — blocked when user has a saved choice ──────────
     LaunchedEffect(passiveMood, passiveConfidence) {
         if (savedMoodKey != null) {
-            // User has a saved choice — always restore it
             if (!mascotMood.isUserOverride || mascotMood.mood != savedMoodKey)
                 mascotMood = MascotMoodDetector.getMoodForKey(savedMoodKey).copy(isUserOverride = true)
             return@LaunchedEffect
@@ -253,17 +251,13 @@ fun HomeScreen(
         }
     }
 
-    // ── Track change — re-apply user's mood after each track switch ───────
     var previousTrackId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(currentTrack?.id) {
         val newId = currentTrack?.id; val prevId = previousTrackId
         if (prevId != null && newId != prevId) {
             val listenRatio = rlEngine.onTrackEnded(wasSkipped = true)
             val rewardType  = when { listenRatio < 0.2f -> RewardType.SKIPPED; listenRatio > 0.8f -> RewardType.COMPLETED; else -> RewardType.PLAYED }
-            scope.launch {
-                rlEngine.recordReward(RewardEvent(type = rewardType, mood = mascotMood.mood, trackFeatures = null, durationRatio = listenRatio, queryUsed = ""))
-            }
-            // Re-apply saved mood after track change
+            scope.launch { rlEngine.recordReward(RewardEvent(type = rewardType, mood = mascotMood.mood, trackFeatures = null, durationRatio = listenRatio, queryUsed = "")) }
             if (savedMoodKey != null)
                 mascotMood = MascotMoodDetector.getMoodForKey(savedMoodKey).copy(isUserOverride = true)
         }
@@ -276,8 +270,7 @@ fun HomeScreen(
             "You've been listening for a while 🎵 How are you feeling?",
             "Still vibing? Let me know how you're doing 😊",
             "Hey! Quick check-in — how's your mood right now? 🌟",
-            "You've had quite a music session! Feeling good? 💫",
-            "Long listening session detected! Want to tell me how you feel? 🎶"
+            "You've had quite a music session! Feeling good? 💫"
         )
     }
     var totalListeningMs by remember { mutableLongStateOf(0L) }
@@ -288,18 +281,16 @@ fun HomeScreen(
         if (passiveMood.isNotEmpty() && passiveMood != "neutral")
             recentTrackMoods = (recentTrackMoods + passiveMood).takeLast(5)
     }
-
     LaunchedEffect(isPlayingMusic) {
         if (!isPlayingMusic) return@LaunchedEffect
         while (true) {
             delay(10_000L); totalListeningMs += 10_000L
             listenStreakMinutes = (totalListeningMs / 60_000L).toInt()
-            val similarityScore = if (recentTrackMoods.size >= 2) {
-                val max = recentTrackMoods.groupingBy { it }.eachCount().values.max()
-                max.toFloat() / recentTrackMoods.size
+            val sim = if (recentTrackMoods.size >= 2) {
+                recentTrackMoods.groupingBy { it }.eachCount().values.max().toFloat() / recentTrackMoods.size
             } else 0.5f
-            val gapMs = when { similarityScore >= 0.8f -> 30 * 60 * 1000L; similarityScore <= 0.3f -> 60 * 60 * 1000L; else -> 45 * 60 * 1000L }
-            if (totalListeningMs - lastCheckInMs >= gapMs) { lastCheckInMs = totalListeningMs; chatMessage = listenCheckInMessages.random() }
+            val gap = when { sim >= 0.8f -> 30 * 60 * 1000L; sim <= 0.3f -> 60 * 60 * 1000L; else -> 45 * 60 * 1000L }
+            if (totalListeningMs - lastCheckInMs >= gap) { lastCheckInMs = totalListeningMs; chatMessage = listenCheckInMessages.random() }
         }
     }
 
@@ -372,8 +363,11 @@ fun HomeScreen(
             Box(modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)) {
                 Column(Modifier.fillMaxSize().verticalScroll(scrollState)) {
 
-                    // Top bar
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // ── Top bar ───────────────────────────────────────────
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             Modifier.size(44.dp).clip(CircleShape)
                                 .background(if (isDark) Color(0xFF2A2A4A) else Color(0xFF1A1A2E))
@@ -387,7 +381,7 @@ fun HomeScreen(
                         }
                     }
 
-                    // Spotify banner
+                    // ── Spotify banner ────────────────────────────────────
                     if (!isSpotifyConnected) {
                         val errorMsg  = spotifyAuthState?.errorMessage
                         val isExpired = errorMsg != null && errorMsg.contains("expired", ignoreCase = true)
@@ -398,7 +392,6 @@ fun HomeScreen(
                         ) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 if (isExpired) Icon(Icons.Filled.Warning, null, tint = Color.White)
-//                                Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(if (isExpired) "Session expired" else "Connect Spotify", color = Color.White, fontWeight = FontWeight.Bold)
                                     Text(if (isExpired) "Tap to reconnect" else "Get personalized recommendations", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
@@ -409,38 +402,42 @@ fun HomeScreen(
                         Spacer(Modifier.height(16.dp))
                     }
 
-                    // Mascot widget
+                    // ══════════════════════════════════════════════════════
+                    //  UNIFIED BUDDY HUB CARD
+                    //  Replaces: MascotWidget + MoodEqualizerBox
+                    // ══════════════════════════════════════════════════════
                     Box(
-                        modifier = Modifier
+                        Modifier
                             .padding(horizontal = 16.dp)
                             .onGloballyPositioned { coords ->
-                                mascotWidgetBottomY = coords.positionInParent().y + coords.size.height
+                                hubCardBottomY = coords.positionInParent().y + coords.size.height
                             }
                     ) {
-                        MascotWidget(
+                        BuddyHubCard(
                             mood               = mascotMood,
                             petState           = petState,
                             petRepository      = localPetRepo,
                             chatMessage        = chatMessage,
-                            onQuickReply       = { },
-                            onTapMascot        = { },
                             onChangeMood       = { showMoodPicker = true },
                             onEditMascot       = { onNavigateToPetShop() },
                             onOpenChat         = { msg -> onNavigateToEmotionChat(msg) },
-                            onSendMessage      = { msg -> onNavigateToEmotionChat(msg) },
                             isPlayingMusic     = isPlayingMusic,
                             personalityProfile = personalityProfile,
+                            checkInState       = checkInState,
+                            onCheckIn          = { mood -> checkInVm.checkIn(mood) },
+                            onCheckInRaw       = { key -> checkInVm.checkInRaw(key) },
                             themeState         = themeState
                         )
                     }
 
                     Spacer(Modifier.height(24.dp))
 
-                    // Music sections
+                    // ── Music sections ────────────────────────────────────
                     when {
                         isLoading -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(); Spacer(Modifier.height(8.dp))
+                                CircularProgressIndicator()
+                                Spacer(Modifier.height(8.dp))
                                 Text("Loading your music...", color = secondaryTextColor, fontSize = 14.sp)
                             }
                         }
@@ -449,10 +446,12 @@ fun HomeScreen(
                         }
                         loadError != null -> Card(
                             Modifier.fillMaxWidth().padding(16.dp).clickable { hasLoaded = false; loadError = null; sections = emptyList() },
-                            shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800))
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800))
                         ) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Refresh, null, tint = Color.White); Spacer(Modifier.width(12.dp))
+                                Icon(Icons.Filled.Refresh, null, tint = Color.White)
+                                Spacer(Modifier.width(12.dp))
                                 Column {
                                     Text("Tap to retry", color = Color.White, fontWeight = FontWeight.Bold)
                                     Text(loadError ?: "", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
@@ -463,14 +462,27 @@ fun HomeScreen(
                             Text("No recommendations yet. Try changing your mood!", color = secondaryTextColor)
                         }
                         else -> sections.forEach { section ->
-                            Text("${section.emoji} ${section.title}", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = primaryTextColor, modifier = Modifier.padding(horizontal = 20.dp))
+                            Text(
+                                "${section.emoji} ${section.title}",
+                                fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                                color = primaryTextColor,
+                                modifier = Modifier.padding(horizontal = 20.dp)
+                            )
                             Spacer(Modifier.height(12.dp))
-                            LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
                                 items(section.tracks) { track ->
                                     SmallTrackCard(
                                         track = track, all = section.tracks,
-                                        vm = musicPlayerViewModel, onNav = onNavigateToMusicPlayer, isDark = isDark,
-                                        onLongPress = { explainTrack = track; explainSectionTitle = section.title; explainSectionEmoji = section.emoji }
+                                        vm = musicPlayerViewModel, onNav = onNavigateToMusicPlayer,
+                                        isDark = isDark,
+                                        onLongPress = {
+                                            explainTrack = track
+                                            explainSectionTitle = section.title
+                                            explainSectionEmoji = section.emoji
+                                        }
                                     )
                                 }
                             }
@@ -483,6 +495,7 @@ fun HomeScreen(
         }
     }
 
+    // ── Recommendation explanation sheet ──────────────────────────────────
     val explainTrackSnapshot = explainTrack
     if (explainTrackSnapshot != null) {
         val archetypeLabel = try {
@@ -504,13 +517,10 @@ fun HomeScreen(
 
     if (showMoodPicker) {
         MoodPickerDialog(
-            currentMood = mascotMood.mood,
-            isDark      = isDark,
+            currentMood = mascotMood.mood, isDark = isDark,
             onSelect    = { selected ->
                 val old = mascotMood.mood
-                // 1. Update display mood
                 mascotMood = MascotMoodDetector.getMoodForKey(selected).copy(isUserOverride = true)
-                // 2. Propagate to root — this survives ALL navigation
                 onMoodSelected(selected)
                 chatMessage = null; showMoodPicker = false
                 moodHistoryRepo.saveMoodExplicit(selected, "Changed from $old to $selected")
@@ -521,7 +531,9 @@ fun HomeScreen(
     }
 }
 
-// ── Shared composables ────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  Shared composables (unchanged from original)
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun RecommendationExplanationSheet(
@@ -618,16 +630,16 @@ fun BottomNavBar(
     onFriends: () -> Unit, onLibrary: () -> Unit, themeState: AppThemeState = AppThemeState()
 ) {
     val navItems = listOf(
-        Triple(Icons.Filled.Home, "Home", onHome), Triple(Icons.Filled.Search, "Search", onSearch),
-        Triple(Icons.Filled.People, "Friends", onFriends), Triple(Icons.Filled.LibraryMusic, "Library", onLibrary)
+        Triple(Icons.Filled.Home, "Home", onHome),
+        Triple(Icons.Filled.Search, "Search", onSearch),
+        Triple(Icons.Filled.People, "Friends", onFriends),
+        Triple(Icons.Filled.LibraryMusic, "Library", onLibrary)
     )
     val p = themeState.activePalette; val isDark = themeState.isDark; val speed = themeState.transitionSpeed
-    val navBg     by animateColorAsState(if (isDark) p.darkBottom else p.lightBottom, tween(speed), label = "navBg")
-    // Selected: white on dark, near-black on light
-    val selColor  by animateColorAsState(if (isDark) Color(0xFFFFFFFF) else Color(0xFF1A1A2E), tween(speed), label = "navSel")
-    // Unselected: muted in both modes
+    val navBg      by animateColorAsState(if (isDark) p.darkBottom else p.lightBottom, tween(speed), label = "navBg")
+    val selColor   by animateColorAsState(if (isDark) Color(0xFFFFFFFF) else Color(0xFF1A1A2E), tween(speed), label = "navSel")
     val unselColor by animateColorAsState(if (isDark) Color(0xFF888899) else Color(0xFF757585), tween(speed), label = "navUnsel")
-    val divColor  by animateColorAsState(if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.08f), tween(speed), label = "navDiv")
+    val divColor   by animateColorAsState(if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.08f), tween(speed), label = "navDiv")
     Column {
         HorizontalDivider(thickness = 0.6.dp, color = divColor)
         NavigationBar(containerColor = navBg, tonalElevation = 0.dp, modifier = Modifier.height(72.dp)) {
@@ -639,11 +651,9 @@ fun BottomNavBar(
                     label = { Text(label, fontSize = 10.sp, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1) },
                     alwaysShowLabel = true,
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor   = selColor,
-                        selectedTextColor   = selColor,
-                        unselectedIconColor = unselColor,
-                        unselectedTextColor = unselColor,
-                        indicatorColor      = Color.Transparent
+                        selectedIconColor = selColor, selectedTextColor = selColor,
+                        unselectedIconColor = unselColor, unselectedTextColor = unselColor,
+                        indicatorColor = Color.Transparent
                     )
                 )
             }
@@ -667,7 +677,7 @@ fun MiniMusicPlayer(vm: MusicPlayerViewModel?, onNav: () -> Unit, themeState: Ap
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(t.name,   fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f),  maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = { vm?.togglePlayPause() }) {
                 Icon(if (ps.value.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "PlayPause", tint = Color.White)
@@ -696,9 +706,9 @@ private fun ProfileDrawerContent(
             Text(displayName, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = tc)
             Text(email, fontSize = 13.sp, color = sc)
             Spacer(Modifier.height(32.dp)); HorizontalDivider(color = div); Spacer(Modifier.height(16.dp))
-            DrawerItem(Icons.Filled.Settings,    "Settings",        onSettings,    tc)
-            DrawerItem(Icons.Filled.Link,         "Connect Spotify", onSpotify,     tc)
-            DrawerItem(Icons.Filled.BarChart,     "Mood Recap",      onMoodHistory, tc)
+            DrawerItem(Icons.Filled.Settings, "Settings",        onSettings,    tc)
+            DrawerItem(Icons.Filled.Link,      "Connect Spotify", onSpotify,     tc)
+            DrawerItem(Icons.Filled.BarChart,  "Mood Recap",      onMoodHistory, tc)
             Spacer(Modifier.weight(1f)); HorizontalDivider(color = div); Spacer(Modifier.height(12.dp))
             DrawerItem(Icons.Filled.Logout, "Sign Out", onSignOut, Color.Red)
         }
@@ -713,15 +723,8 @@ private fun DrawerItem(icon: ImageVector, label: String, onClick: () -> Unit, ti
     }
 }
 
-// ── Mood picker — theme-aware ─────────────────────────────────────────────
-
 @Composable
-private fun MoodPickerDialog(
-    currentMood: String,
-    isDark: Boolean = false,
-    onSelect: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
+private fun MoodPickerDialog(currentMood: String, isDark: Boolean = false, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
     val textColor     = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
     val subColor      = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
     val selectedColor = Color(0xFF6A5ACD)
@@ -732,37 +735,24 @@ private fun MoodPickerDialog(
             Column {
                 MascotMoodDetector.allMoodKeys().forEach { mood ->
                     val d = MascotMoodDetector.getMoodForKey(mood)
-                    Row(
-                        Modifier.fillMaxWidth().clickable { onSelect(mood) }.padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(Modifier.fillMaxWidth().clickable { onSelect(mood) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(d.emoji, fontSize = 24.sp)
                         Spacer(Modifier.width(14.dp))
-                        Text(
-                            mood.replaceFirstChar { it.uppercase() }, fontSize = 16.sp,
+                        Text(mood.replaceFirstChar { it.uppercase() }, fontSize = 16.sp,
                             fontWeight = if (mood == currentMood) FontWeight.Bold else FontWeight.Normal,
-                            color = if (mood == currentMood) selectedColor else textColor
-                        )
-                        if (mood == currentMood) {
-                            Spacer(Modifier.weight(1f))
-                            Icon(Icons.Filled.Check, null, tint = selectedColor, modifier = Modifier.size(20.dp))
-                        }
+                            color = if (mood == currentMood) selectedColor else textColor)
+                        if (mood == currentMood) { Spacer(Modifier.weight(1f)); Icon(Icons.Filled.Check, null, tint = selectedColor, modifier = Modifier.size(20.dp)) }
                     }
                 }
             }
         },
-        confirmButton  = {},
-        dismissButton  = { TextButton(onClick = onDismiss) { Text("Cancel", color = subColor) } }
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = subColor) } }
     )
 }
 
-private fun getTimeGreeting(): String {
-    return when (java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)) {
-        in 5..11  -> "Good morning"
-        in 12..16 -> "Good afternoon"
-        in 17..20 -> "Good evening"
-        else      -> "Good night"
-    }
+private fun getTimeGreeting(): String = when (java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)) {
+    in 5..11  -> "Good morning"; in 12..16 -> "Good afternoon"; in 17..20 -> "Good evening"; else -> "Good night"
 }
 
 private fun getMoodSubtitle(mood: String): String = when (mood.lowercase()) {
