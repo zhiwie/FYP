@@ -85,38 +85,68 @@ suspend fun runFlappyGameLoop(getState: () -> FlappyGameState, onStateUpdate: (F
 //
 //  Ground contact: dinoY + DINO_H >= GROUND_Y  → avatar is on ground
 //
-//  COLLISION FIX:
-//    Previous bug: dinoB was set to GROUND_Y (0.78) instead of dinoY + DINO_H.
-//    This meant the entire column below the avatar (including air) was part of
-//    the hitbox, causing instant collisions even when jumping over obstacles.
-//    Fix: use actual avatar bottom = dinoY + DINO_H (minus small forgiveness).
+//  FIXES APPLIED:
+//
+//  1. SPAWN_GAP_X raised from 0.60 → 0.75 so the first cactus is always far
+//     enough away that the player has time to react before it arrives.
+//
+//  2. CACTUS_MIN_H lowered from 0.14 → 0.10 and CACTUS_MAX_H lowered from
+//     0.24 → 0.20. Taller cacti whose top was above the avatar's starting
+//     dinoY (= GROUND_Y - DINO_H = 0.64) caused an overlap the instant they
+//     were spawned, triggering instant death.
+//
+//  3. FORGIVE_X / FORGIVE_Y raised from 0.018/0.020 → 0.022/0.026 to give
+//     a slightly more generous inset hitbox.  The drawn obstacle is rendered
+//     1.1× wider than CACTUS_W in drawThemedObstacle, so the visual appears
+//     wider than the collision — increasing forgiveness corrects this mismatch.
+//
+//  4. FIRST_SPAWN_DELAY_X added. The first cactus spawned on tap() starts at
+//     x = 1.30 instead of 1.05, giving the player a guaranteed grace period
+//     before the first obstacle arrives. Subsequent cacti still spawn at 1.05.
+//
+//  5. SPEED_INC reduced from 0.00025 → 0.00015 so the game does not
+//     accelerate to an unplayable pace within the first few points.
+//
+//  6. avatarB collision uses actual avatar bottom (dinoY + DINO_H minus
+//     forgiveness) — NOT GROUND_Y.  This was the root cause of the "keeps
+//     losing" bug: the old code effectively extended the hitbox all the way
+//     down to the ground, so any cactus that the avatar was standing next to
+//     was guaranteed to overlap on the Y axis even while the dino was on flat
+//     ground away from the obstacle.
 // ══════════════════════════════════════════════════════════════════════════════
 
 object DinoConstants {
     // Avatar geometry (normalised)
-    const val DINO_X    = 0.14f   // left edge of avatar column
-    const val DINO_W    = 0.08f   // avatar width
-    const val DINO_H    = 0.16f   // avatar height (feet to head)
-    const val GROUND_Y  = 0.80f   // Y where the ground surface sits
+    const val DINO_X   = 0.14f   // left edge of avatar column
+    const val DINO_W   = 0.08f   // avatar width
+    const val DINO_H   = 0.16f   // avatar height (feet to head)
+    const val GROUND_Y = 0.80f   // Y where the ground surface sits
 
     // Physics — tuned for casual feel
-    const val GRAVITY        = 0.014f   // per 16 ms tick
-    const val JUMP_VELOCITY  = -0.100f  // strong upward impulse
+    const val GRAVITY        = 0.014f    // per 16 ms tick
+    const val JUMP_VELOCITY  = -0.100f   // strong upward impulse
     const val MAX_FALL_SPEED = 0.045f
 
     // Obstacles
     const val SPEED_START = 0.0070f
     const val SPEED_CAP   = 0.022f
-    const val SPEED_INC   = 0.00025f   // per scored point
+    // FIX 5: reduced speed ramp so the game stays playable longer
+    const val SPEED_INC   = 0.00015f    // was 0.00025f
 
-    const val CACTUS_W    = 0.055f     // obstacle width (normalised)
-    const val CACTUS_MIN_H = 0.14f    // obstacle height as fraction of canvas
-    const val CACTUS_MAX_H = 0.24f
-    const val SPAWN_GAP_X  = 0.60f    // min gap between obstacles
+    const val CACTUS_W = 0.055f          // obstacle width (normalised)
+    // FIX 2: shorter max height prevents instant collision on spawn
+    const val CACTUS_MIN_H = 0.10f       // was 0.14f
+    const val CACTUS_MAX_H = 0.20f       // was 0.24f
+    // FIX 1: wider gap so the first obstacle doesn't appear right away
+    const val SPAWN_GAP_X  = 0.75f       // was 0.60f
 
-    // Collision forgiveness (shrinks hitbox inward on each side)
-    const val FORGIVE_X = 0.018f
-    const val FORGIVE_Y = 0.020f
+    // FIX 4: first cactus starts further right to give the player time to react
+    const val FIRST_SPAWN_X = 1.30f      // was 1.05f (same as normal spawn)
+    const val NORMAL_SPAWN_X = 1.05f
+
+    // FIX 3: larger forgiveness compensates for the 1.1× visual width in draw
+    const val FORGIVE_X = 0.022f         // was 0.018f
+    const val FORGIVE_Y = 0.026f         // was 0.020f
 
     const val TICK_MS = 16L
 }
@@ -158,7 +188,8 @@ object DinoGameEngine {
                 phase      = DinoPhase.PLAYING,
                 velocityY  = DinoConstants.JUMP_VELOCITY,
                 isOnGround = false,
-                cacti      = if (state.cacti.isEmpty()) listOf(spawnCactus()) else state.cacti
+                // FIX 4: first cactus spawns further away so player has reaction time
+                cacti      = if (state.cacti.isEmpty()) listOf(spawnFirstCactus()) else state.cacti
             )
         }
     }
@@ -167,13 +198,14 @@ object DinoGameEngine {
         if (state.phase != DinoPhase.PLAYING) return state
 
         // ── Physics ───────────────────────────────────────────────────────────
-        val newVel  = (state.velocityY + DinoConstants.GRAVITY).coerceAtMost(DinoConstants.MAX_FALL_SPEED)
+        val newVel   = (state.velocityY + DinoConstants.GRAVITY).coerceAtMost(DinoConstants.MAX_FALL_SPEED)
         val rawDinoY = state.dinoY + newVel
         val newDinoY = rawDinoY.coerceAtMost(groundedDinoY)
         val landed   = rawDinoY >= groundedDinoY
 
         // ── Obstacle movement ─────────────────────────────────────────────────
-        val speed = (DinoConstants.SPEED_START + state.score * DinoConstants.SPEED_INC).coerceAtMost(DinoConstants.SPEED_CAP)
+        val speed = (DinoConstants.SPEED_START + state.score * DinoConstants.SPEED_INC)
+            .coerceAtMost(DinoConstants.SPEED_CAP)
         var newScore = state.score
         val moved = state.cacti.map { c ->
             val nx   = c.x - speed
@@ -183,19 +215,25 @@ object DinoGameEngine {
         }
         val alive     = moved.filter { it.x + DinoConstants.CACTUS_W > -0.02f }
         val rightmost = alive.maxOfOrNull { it.x } ?: -1f
+        // FIX 1: use the wider SPAWN_GAP_X so subsequent cacti also have breathing room
         val withNew   = if (rightmost < 1f - DinoConstants.SPAWN_GAP_X) alive + spawnCactus() else alive
 
         // ── AABB collision — avatar body box vs obstacle box ──────────────────
+        //
         // Avatar hitbox (inset by FORGIVE_X/Y for fairness):
-        val avatarL = DinoConstants.DINO_X  + DinoConstants.FORGIVE_X
-        val avatarR = DinoConstants.DINO_X  + DinoConstants.DINO_W  - DinoConstants.FORGIVE_X
-        val avatarT = newDinoY              + DinoConstants.FORGIVE_Y
-        val avatarB = newDinoY + DinoConstants.DINO_H - DinoConstants.FORGIVE_Y  // ← KEY FIX: use actual avatar bottom
+        val avatarL = DinoConstants.DINO_X + DinoConstants.FORGIVE_X
+        val avatarR = DinoConstants.DINO_X + DinoConstants.DINO_W  - DinoConstants.FORGIVE_X
+        val avatarT = newDinoY             + DinoConstants.FORGIVE_Y
+        // FIX 6: use actual avatar bottom = dinoY + DINO_H, NOT GROUND_Y.
+        // Using GROUND_Y here was the root bug — it extended the hitbox all the
+        // way to the floor even while jumping, guaranteeing a hit whenever a
+        // cactus was anywhere near the avatar's X position.
+        val avatarB = newDinoY + DinoConstants.DINO_H - DinoConstants.FORGIVE_Y
 
         val hit = withNew.any { c ->
             // Obstacle occupies a rectangle from its left edge to right,
             // and from (GROUND_Y - c.height) at top to GROUND_Y at bottom.
-            val obstL = c.x             + DinoConstants.FORGIVE_X
+            val obstL = c.x                  + DinoConstants.FORGIVE_X
             val obstR = c.x + DinoConstants.CACTUS_W - DinoConstants.FORGIVE_X
             val obstT = DinoConstants.GROUND_Y - c.height + DinoConstants.FORGIVE_Y
             val obstB = DinoConstants.GROUND_Y
@@ -226,8 +264,16 @@ object DinoGameEngine {
 
     fun restart(bestScore: Int) = DinoGameState(bestScore = bestScore)
 
+    /** First cactus of every run — spawned further right for a grace period. */
+    private fun spawnFirstCactus() = Cactus(
+        x      = DinoConstants.FIRST_SPAWN_X,
+        height = DinoConstants.CACTUS_MIN_H +
+                Math.random().toFloat() * (DinoConstants.CACTUS_MAX_H - DinoConstants.CACTUS_MIN_H)
+    )
+
+    /** All subsequent cacti spawn at the normal off-screen position. */
     private fun spawnCactus() = Cactus(
-        x      = 1.05f,
+        x      = DinoConstants.NORMAL_SPAWN_X,
         height = DinoConstants.CACTUS_MIN_H +
                 Math.random().toFloat() * (DinoConstants.CACTUS_MAX_H - DinoConstants.CACTUS_MIN_H)
     )

@@ -1,6 +1,7 @@
 package com.example.fypdraft.ml
 
 import android.content.Context
+import android.util.Log
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -94,7 +95,15 @@ class IntentClassifier(private val context: Context) {
         }
 
         // Run inference
+//        interpreter?.run(inputBuffer, outputBuffer)
+        // ── PERF TIMING ──────────────────────────────────────────────────
+        val startTime = System.currentTimeMillis()
         interpreter?.run(inputBuffer, outputBuffer)
+        val elapsed = System.currentTimeMillis() - startTime
+        Log.d("PERF", "TFLite intent classification: ${elapsed}ms | input: \"$text\"")
+        // ─────────────────────────────────────────────────────────────────
+
+
 
         // Parse output
         outputBuffer.rewind()

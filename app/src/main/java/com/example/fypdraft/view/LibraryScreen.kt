@@ -38,9 +38,13 @@ import com.example.fypdraft.model.Track
 import com.example.fypdraft.ui.theme.AppThemeState
 import com.example.fypdraft.ui.theme.animatedMoodBrushLight
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,8 +80,6 @@ fun LibraryScreen(
     var favorites        by remember { mutableStateOf<List<Pair<String, SongRecommendation>>>(emptyList()) }
     var playlists        by remember { mutableStateOf<List<SpotifyPlaylistInfo>>(emptyList()) }
     var playlistsLoading by remember { mutableStateOf(false) }
-    var selectedFilter   by remember { mutableStateOf("All") }
-    val filters          = listOf("All", "Favorites", "Playlists")
     var loadingSongId    by remember { mutableStateOf<String?>(null) }
 
     // Playlist detail state
@@ -85,6 +87,16 @@ fun LibraryScreen(
     var playlistTracks        by remember { mutableStateOf<List<Track>>(emptyList()) }
     var playlistTracksLoading by remember { mutableStateOf(false) }
     var playlistError         by remember { mutableStateOf<String?>(null) }
+
+    // Recently Played sheet state
+    var showRecentlyPlayed         by remember { mutableStateOf(false) }
+    var recentlyPlayedTracks       by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var recentlyPlayedLoading      by remember { mutableStateOf(false) }
+
+    // Liked Songs sheet state — merges Spotify saved tracks + Firestore favorites
+    var showLikedSongs             by remember { mutableStateOf(false) }
+    var likedSpotifyTracks         by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var likedSongsLoading          by remember { mutableStateOf(false) }
 
     val isSpotifyConnected = spotifyRepository?.let {
         val authState by it.authState.collectAsState()
@@ -96,6 +108,51 @@ fun LibraryScreen(
         try {
             favoritesRepo.observeFavorites().catch { }.collect { list -> favorites = list }
         } catch (_: Exception) {}
+    }
+
+    // Load recently played from Firestore when sheet opens
+    LaunchedEffect(showRecentlyPlayed) {
+        if (!showRecentlyPlayed) return@LaunchedEffect
+        recentlyPlayedLoading = true
+        try {
+            val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return@LaunchedEffect
+            val snapshot = withContext(Dispatchers.IO) {
+                FirebaseFirestore.getInstance()
+                    .collection("playbackHistory").document(uid).collection("tracks")
+                    .orderBy("timestamp", Query.Direction.DESCENDING)
+                    .limit(50)
+                    .get().await()
+            }
+            val seen = mutableSetOf<String>()
+            recentlyPlayedTracks = snapshot.documents.mapNotNull { doc ->
+                val trackId = doc.getString("trackId") ?: return@mapNotNull null
+                if (!seen.add(trackId)) return@mapNotNull null   // deduplicate
+                Track(
+                    id          = trackId,
+                    name        = doc.getString("title") ?: return@mapNotNull null,
+                    artist      = doc.getString("artist") ?: "",
+                    album       = "",
+                    albumArtUrl = doc.getString("albumArt") ?: "",
+                    previewUrl  = null,
+                    durationMs  = 0L,
+                    spotifyUri  = doc.getString("spotifyUri")?.takeIf { it.isNotBlank() }
+                )
+            }
+        } catch (_: Exception) {}
+        recentlyPlayedLoading = false
+    }
+
+    // Load Spotify saved tracks ("Liked Songs") when sheet opens
+    LaunchedEffect(showLikedSongs) {
+        if (!showLikedSongs) return@LaunchedEffect
+        val repo = spotifyMusicRepo ?: return@LaunchedEffect   // not connected — skip, show Firestore only
+        likedSongsLoading = true
+        try {
+            likedSpotifyTracks = withContext(Dispatchers.IO) {
+                repo.getUserSavedTracks(50)
+            }
+        } catch (_: Exception) {}
+        likedSongsLoading = false
     }
 
     // Load playlists when Spotify connects
@@ -124,11 +181,37 @@ fun LibraryScreen(
                 spotifyMusicRepo.getPlaylistTracks(playlist.id, limit = 50)
             }
             if (tracks.isEmpty()) playlistError = "No playable tracks found in this playlist."
-            else playlistTracks = tracks
+            else {
+                playlistTracks = tracks
+                // Fix track count if Spotify reported 0 (happens with "item" key playlists)
+                if (openPlaylist?.trackCount == 0 && tracks.isNotEmpty()) {
+                    playlists = playlists.map {
+                        if (it.id == playlist.id) it.copy(trackCount = tracks.size) else it
+                    }
+                }
+            }
         } catch (e: SecurityException) {
-            // Spotify Development Mode 403: only playlists you own are accessible.
-            // Playlists saved from other users or Spotify editorial playlists are blocked.
-            playlistError = "⚠️ Spotify restricts playlist access in Development Mode.\n\nOnly playlists you personally created are accessible. Playlists you follow or saved from others cannot be opened.\n\nTip: Create a new playlist in Spotify, add songs to it, and try again."
+            // Spotify Development Mode 403: direct playlist access is blocked for
+            // followed/editorial playlists. Fall back to a search-based approach
+            // using the playlist name so users still get something playable.
+            try {
+                val fallbackTracks = withContext(Dispatchers.IO) {
+                    spotifyMusicRepo.getPlaylistTracksFallback(
+                        playlistId   = playlist.id,
+                        playlistName = playlist.name,
+                        limit        = 30
+                    )
+                }
+                if (fallbackTracks.isEmpty()) {
+                    playlistError = "Couldn't find tracks for \"${playlist.name}\".\n\nSpotify restricts access to followed playlists in Development Mode. Try opening a playlist you created yourself."
+                } else {
+                    playlistTracks = fallbackTracks
+                    // Surface a soft banner so the user knows these are search results
+                    playlistError = "~"   // sentinel: UI checks for "~" to show info banner
+                }
+            } catch (fe: Exception) {
+                playlistError = "Couldn't load \"${playlist.name}\". Try a playlist you created yourself."
+            }
         } catch (e: Exception) {
             playlistError = "Could not load tracks: ${e.message}"
         }
@@ -161,23 +244,6 @@ fun LibraryScreen(
                     Text("Your Library", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = primaryText)
                 }
 
-                Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    filters.forEach { filter ->
-                        FilterChip(
-                            selected = selectedFilter == filter,
-                            onClick  = { selectedFilter = filter },
-                            label    = { Text(filter, fontSize = 13.sp) },
-                            shape    = RoundedCornerShape(20.dp),
-                            colors   = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFF1A1A2E),
-                                selectedLabelColor     = Color.White,
-                                containerColor         = cardBg,
-                                labelColor             = primaryText
-                            )
-                        )
-                    }
-                }
-
                 Spacer(Modifier.height(12.dp))
 
                 LazyColumn(
@@ -187,9 +253,9 @@ fun LibraryScreen(
                     item {
                         LibraryItem(
                             icon = Icons.Filled.Favorite, iconBg = Color(0xFFFF6B6B),
-                            title = "Liked Songs", subtitle = "${favorites.size} songs",
+                            title = "Liked Songs", subtitle = if (likedSpotifyTracks.isEmpty() && favorites.isEmpty()) "Tap to view" else "${likedSpotifyTracks.size + favorites.size} songs",
                             primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint,
-                            onClick = { selectedFilter = "Favorites" }
+                            onClick = { showLikedSongs = true }
                         )
                     }
                     item {
@@ -197,12 +263,12 @@ fun LibraryScreen(
                             icon = Icons.Filled.History, iconBg = Color(0xFF6A5ACD),
                             title = "Recently Played", subtitle = "Jump back in",
                             primaryText = primaryText, secondaryText = secondaryText, iconTint = iconTint,
-                            onClick = {}
+                            onClick = { showRecentlyPlayed = true }
                         )
                     }
 
                     // ── Playlists ─────────────────────────────────────────
-                    if (selectedFilter == "Playlists" || selectedFilter == "All") {
+                    if (true) {
                         if (!isSpotifyConnected) {
                             item {
                                 Card(
@@ -254,58 +320,6 @@ fun LibraryScreen(
                                         Spacer(Modifier.height(8.dp))
                                         Text("No playlists found", fontWeight = FontWeight.SemiBold, color = primaryText)
                                         Text("Create a playlist on Spotify to see it here", color = secondaryText, fontSize = 13.sp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Favorites ─────────────────────────────────────────
-                    if (selectedFilter == "Favorites" || selectedFilter == "All") {
-                        if (favorites.isNotEmpty()) {
-                            item {
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    "Your Favorites",
-                                    fontSize   = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color      = primaryText,
-                                    modifier   = Modifier.padding(vertical = 8.dp)
-                                )
-                            }
-                            items(favorites) { (docId, song) ->
-                                val songId    = "${song.artist}-${song.title}"
-                                val isLoading = loadingSongId == songId
-                                FavoriteItem(
-                                    song          = song,
-                                    isLoading     = isLoading,
-                                    isDark        = isDark,
-                                    primaryText   = primaryText,
-                                    secondaryText = secondaryText,
-                                    onPlay = {
-                                        if (musicPlayerViewModel != null) {
-                                            loadingSongId = songId
-                                            musicPlayerViewModel.playFromRecommendation(song.title, song.artist) { success, _ ->
-                                                loadingSongId = null
-                                                if (success) onNavigateToMusicPlayer()
-                                            }
-                                        }
-                                    },
-                                    onRemove = {
-                                        scope.launch {
-                                            try { favoritesRepo.removeFavorite(docId) } catch (_: Exception) {}
-                                        }
-                                    }
-                                )
-                            }
-                        } else if (selectedFilter == "Favorites") {
-                            item {
-                                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text("💖", fontSize = 40.sp)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("No favorites yet", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = primaryText)
-                                        Text("Like songs to see them here!", color = secondaryText, fontSize = 13.sp)
                                     }
                                 }
                             }
@@ -377,6 +391,191 @@ fun LibraryScreen(
                 }
             }
         }
+
+        // ── Recently Played Sheet ─────────────────────────────────────────
+        AnimatedVisibility(
+            visible  = showRecentlyPlayed,
+            enter    = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit     = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                        showRecentlyPlayed = false
+                    }
+            ) {
+                Card(
+                    modifier  = Modifier.fillMaxWidth().fillMaxHeight(0.88f).align(Alignment.BottomCenter)
+                        .clickable(enabled = false) {},
+                    shape     = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                    colors    = CardDefaults.cardColors(containerColor = sheetBg),
+                    elevation = CardDefaults.cardElevation(20.dp)
+                ) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.width(36.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
+                            .background(if (isDark) Color(0xFF3A3A5A) else Color(0xFFDDDDDD)))
+                    }
+                    SimpleTrackSheet(
+                        title         = "Recently Played",
+                        emoji         = "🕘",
+                        tracks        = recentlyPlayedTracks,
+                        isLoading     = recentlyPlayedLoading,
+                        emptyMessage  = "No recently played tracks yet.\nStart listening to build your history!",
+                        isDark        = isDark,
+                        primaryText   = primaryText,
+                        secondaryText = secondaryText,
+                        onDismiss     = { showRecentlyPlayed = false },
+                        onPlayTrack   = { track ->
+                            musicPlayerViewModel?.playFromRecommendation(track.name, track.artist) { ok, _ ->
+                                if (ok) { showRecentlyPlayed = false; onNavigateToMusicPlayer() }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // ── Liked Songs Sheet ─────────────────────────────────────────────
+        AnimatedVisibility(
+            visible  = showLikedSongs,
+            enter    = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit     = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                        showLikedSongs = false
+                    }
+            ) {
+                Card(
+                    modifier  = Modifier.fillMaxWidth().fillMaxHeight(0.88f).align(Alignment.BottomCenter)
+                        .clickable(enabled = false) {},
+                    shape     = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                    colors    = CardDefaults.cardColors(containerColor = sheetBg),
+                    elevation = CardDefaults.cardElevation(20.dp)
+                ) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.width(36.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
+                            .background(if (isDark) Color(0xFF3A3A5A) else Color(0xFFDDDDDD)))
+                    }
+                    // Merge: Spotify saved tracks first, then any app-liked songs not already present
+                    val spotifyTrackIds = likedSpotifyTracks.map { it.id }.toSet()
+                    val firestoreAsTrack = favorites.map { (_, song) ->
+                        Track(
+                            id          = "${song.artist}::${song.title}",
+                            name        = song.title,
+                            artist      = song.artist,
+                            album       = "",
+                            albumArtUrl = "",
+                            previewUrl  = null,
+                            durationMs  = 0L,
+                            spotifyUri  = null
+                        )
+                    }
+                    // Deduplicate firestoreAsTrack against Spotify by name+artist (case-insensitive)
+                    val spotifyNameKeys = likedSpotifyTracks
+                        .map { "${it.name.lowercase()}::${it.artist.lowercase()}" }.toSet()
+                    val firestoreOnly = firestoreAsTrack.filter {
+                        "${it.name.lowercase()}::${it.artist.lowercase()}" !in spotifyNameKeys
+                    }
+                    // Final dedup within each source by id
+                    val mergedLiked = (likedSpotifyTracks + firestoreOnly).distinctBy { it.id }
+                    SimpleTrackSheet(
+                        title         = "Liked Songs",
+                        emoji         = "❤️",
+                        tracks        = mergedLiked,
+                        isLoading     = likedSongsLoading,
+                        emptyMessage  = "No liked songs yet.\nHeart a song in the player to save it here!",
+                        isDark        = isDark,
+                        primaryText   = primaryText,
+                        secondaryText = secondaryText,
+                        onDismiss     = { showLikedSongs = false },
+                        onPlayTrack   = { track ->
+                            musicPlayerViewModel?.playFromRecommendation(track.name, track.artist) { ok, _ ->
+                                if (ok) { showLikedSongs = false; onNavigateToMusicPlayer() }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SimpleTrackSheet — shared sheet for Recently Played and Liked Songs
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SimpleTrackSheet(
+    title: String,
+    emoji: String,
+    tracks: List<Track>,
+    isLoading: Boolean,
+    emptyMessage: String,
+    isDark: Boolean,
+    primaryText: Color,
+    secondaryText: Color,
+    onDismiss: () -> Unit,
+    onPlayTrack: (Track) -> Unit
+) {
+    val listState = rememberLazyListState()
+    Column(Modifier.fillMaxSize()) {
+        // Header
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(emoji, fontSize = 28.sp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = primaryText)
+                Text("${tracks.size} songs", fontSize = 13.sp, color = secondaryText)
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Filled.Close, "Close", tint = secondaryText)
+            }
+        }
+
+        HorizontalDivider(color = if (isDark) Color(0xFF2A2A3A) else Color(0xFFEEEEEE))
+
+        when {
+            isLoading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Color(0xFF1DB954))
+                        Spacer(Modifier.height(12.dp))
+                        Text("Loading…", fontSize = 14.sp, color = secondaryText)
+                    }
+                }
+            }
+            tracks.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                        Text(emoji, fontSize = 40.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Text(emptyMessage, fontSize = 14.sp, color = secondaryText, textAlign = TextAlign.Center)
+                    }
+                }
+            }
+            else -> {
+                LazyColumn(state = listState, contentPadding = PaddingValues(vertical = 8.dp), modifier = Modifier.fillMaxSize()) {
+                    items(tracks, key = { it.id }) { track ->
+                        PlaylistTrackRow(
+                            track         = track,
+                            isPlaying     = false,
+                            isDark        = isDark,
+                            primaryText   = primaryText,
+                            secondaryText = secondaryText,
+                            onClick       = { onPlayTrack(track) }
+                        )
+                    }
+                    item { Spacer(Modifier.height(40.dp)) }
+                }
+            }
+        }
     }
 }
 
@@ -427,10 +626,7 @@ private fun PlaylistDetailSheet(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     color = primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    "${playlist.trackCount} tracks · ${playlist.ownerName}",
-                    fontSize = 13.sp, color = secondaryText
-                )
+                Text(playlist.ownerName, fontSize = 13.sp, color = secondaryText)
             }
             IconButton(onClick = onDismiss) {
                 Icon(Icons.Filled.Close, "Close", tint = secondaryText)
@@ -473,6 +669,10 @@ private fun PlaylistDetailSheet(
         HorizontalDivider(color = if (isDark) Color(0xFF2A2A3A) else Color(0xFFEEEEEE))
 
         // ── Track list ────────────────────────────────────────────────
+        // "~" is a sentinel meaning: restricted playlist, but we found fallback tracks
+        val isFallback = errorMessage == "~"
+        val isHardError = errorMessage != null && !isFallback
+
         when {
             isLoading -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -483,12 +683,12 @@ private fun PlaylistDetailSheet(
                     }
                 }
             }
-            errorMessage != null -> {
+            isHardError -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
                         Text("😕", fontSize = 40.sp)
                         Spacer(Modifier.height(8.dp))
-                        Text(errorMessage, fontSize = 14.sp, color = secondaryText, textAlign = TextAlign.Center)
+                        Text(errorMessage!!, fontSize = 14.sp, color = secondaryText, textAlign = TextAlign.Center)
                     }
                 }
             }
@@ -507,6 +707,29 @@ private fun PlaylistDetailSheet(
                     contentPadding = PaddingValues(vertical = 8.dp),
                     modifier       = Modifier.fillMaxSize()
                 ) {
+                    // Soft info banner for fallback results
+                    if (isFallback) {
+                        item {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFFFFF3CD))
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("ℹ️", fontSize = 16.sp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Direct playlist access is restricted. Showing similar tracks based on playlist name.",
+                                    fontSize = 12.sp,
+                                    color    = Color(0xFF664D03)
+                                )
+                            }
+                        }
+                    }
+
                     items(tracks, key = { it.id }) { track ->
                         PlaylistTrackRow(
                             track         = track,
@@ -676,7 +899,7 @@ private fun PlaylistItem(
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(playlist.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = primaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${playlist.trackCount} tracks · ${playlist.ownerName}", fontSize = 12.sp, color = secondaryText, maxLines = 1)
+            Text(playlist.ownerName, fontSize = 12.sp, color = secondaryText, maxLines = 1)
         }
         Icon(Icons.Filled.ChevronRight, null, tint = iconTint, modifier = Modifier.size(20.dp))
     }

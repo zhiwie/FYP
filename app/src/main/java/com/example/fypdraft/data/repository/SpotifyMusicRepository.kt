@@ -93,7 +93,11 @@ class SpotifyMusicRepository(
                 .build()
 
             val request    = Request.Builder().url(httpUrl).addHeader("Authorization", "Bearer $token").build()
-            val body       = execute(request) ?: break
+//            val body       = execute(request) ?: break
+            val searchStart = System.currentTimeMillis()
+            val body = execute(request) ?: break
+            val searchElapsed = System.currentTimeMillis() - searchStart
+            Log.d("PERF", "Spotify keyword search: ${searchElapsed}ms | query: $query")
             val tracksObj  = JSONObject(body).optJSONObject("tracks") ?: break
             val items      = tracksObj.optJSONArray("items") ?: break
             if (items.length() == 0) break
@@ -140,8 +144,13 @@ class SpotifyMusicRepository(
                         val item = items.getJSONObject(i)
                         Log.d(TAG, "🔍 Item $i raw: ${item.toString().take(300)}")
 
-                        if (item.isNull("track")) { Log.d(TAG, "⏭️  Item $i: track is null, skipping"); continue }
-                        val trackObj = item.getJSONObject("track")
+                        // Spotify returns "track" normally, but "item" when the playlist
+                        // was created via certain clients (confirmed via logcat).
+                        val trackObj = when {
+                            !item.isNull("track") -> item.getJSONObject("track")
+                            !item.isNull("item")  -> item.getJSONObject("item")
+                            else -> { Log.d(TAG, "⏭️  Item $i: no track/item key, skipping"); continue }
+                        }
 
                         val id = trackObj.optString("id", "").trim()
                         if (id.isEmpty() || id == "null") { Log.d(TAG, "⏭️  Item $i: missing id, skipping"); continue }
@@ -215,6 +224,63 @@ class SpotifyMusicRepository(
         val filtered = results.filter { it.id !in topIds }
         // ── FIX: deduplicate personalized results ─────────────────────
         (if (filtered.isNotEmpty()) filtered else results).distinctBy { it.id }
+    }
+
+    // ── User saved tracks (Spotify "Liked Songs") ────────────────────
+
+    suspend fun getUserSavedTracks(limit: Int = 50): List<Track> = withContext(Dispatchers.IO) {
+        val token     = getToken() ?: return@withContext emptyList()
+        val safeLimit = limit.coerceIn(1, 50)
+        val allTracks = mutableListOf<Track>()
+        var offset    = 0
+        var done      = false
+
+        while (allTracks.size < safeLimit && !done) {
+            val pageSize = minOf(50, safeLimit - allTracks.size)
+            val body = execute(buildRequest(
+                "$baseUrl/me/tracks?limit=$pageSize&offset=$offset", token
+            )) ?: break
+
+            val json  = JSONObject(body)
+            val items = json.optJSONArray("items") ?: break
+
+            for (i in 0 until items.length()) {
+                try {
+                    val wrapper  = items.getJSONObject(i)
+                    // /me/tracks always wraps under "track"
+                    val trackObj = wrapper.optJSONObject("track") ?: continue
+                    val id = trackObj.optString("id", "").trim()
+                    if (id.isEmpty() || id == "null") continue
+                    val name = trackObj.optString("name", "").trim().takeIf { it.isNotEmpty() } ?: continue
+                    val artistName = trackObj.optJSONArray("artists")
+                        ?.optJSONObject(0)?.optString("name", "") ?: ""
+                    val album     = trackObj.optJSONObject("album")
+                    val artUrl    = album?.optJSONArray("images")?.optJSONObject(0)?.optString("url", "") ?: ""
+                    val albumName = album?.optString("name", "") ?: ""
+                    val rawPreview = trackObj.optString("preview_url", "")
+                    val preview    = if (rawPreview.isNotBlank() && rawPreview != "null") rawPreview else null
+                    val rawUri     = trackObj.optString("uri", "")
+                    val uri        = if (rawUri.isNotBlank() && rawUri != "null") rawUri else null
+                    allTracks.add(Track(
+                        id          = id,
+                        name        = name,
+                        artist      = artistName,
+                        album       = albumName,
+                        albumArtUrl = artUrl,
+                        previewUrl  = preview,
+                        durationMs  = trackObj.optLong("duration_ms", 0L),
+                        spotifyUri  = uri
+                    ))
+                } catch (_: Exception) {}
+            }
+
+            offset += items.length()
+            val hasNext = !json.isNull("next") && json.optString("next").isNotBlank()
+            if (!hasNext) done = true
+        }
+
+        Log.d(TAG, "✅ Spotify saved tracks: ${allTracks.size}")
+        allTracks.distinctBy { it.id }
     }
 
     // ── User top tracks ──────────────────────────────────────────────
@@ -296,6 +362,31 @@ class SpotifyMusicRepository(
             Log.e(TAG, "Network error: $url", e)
             null
         }
+    }
+
+    /**
+     * Fallback for 403-restricted playlists (followed/editorial playlists in Dev Mode).
+     * Fetches the playlist metadata (name) and searches for similar tracks using
+     * the playlist name as a query — giving users something playable even without
+     * direct playlist access.
+     */
+    suspend fun getPlaylistTracksFallback(
+        playlistId: String,
+        playlistName: String,
+        limit: Int = 30
+    ): List<Track> = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔄 Fallback search for restricted playlist: '$playlistName'")
+
+        // Strip common playlist noise words so the search query is tighter
+        val cleanName = playlistName
+            .replace(Regex("(?i)\\b(playlist|mix|songs|tracks|music|official|top|best|ultimate|greatest|hits)\\b"), "")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+
+        val query = if (cleanName.length >= 3) cleanName else playlistName
+        Log.d(TAG, "🔍 Fallback query: '$query'")
+
+        searchTracks(query, limit)
     }
 
     /**

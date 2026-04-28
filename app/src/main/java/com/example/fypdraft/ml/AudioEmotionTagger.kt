@@ -2,6 +2,7 @@ package com.example.fypdraft.ml
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -103,7 +104,15 @@ class AudioEmotionTagger(private val context: Context) {
         }
 
         // Run inference
+//        interpreter?.run(inputBuffer, outputBuffer)
+
+        // ── PERF TIMING ──────────────────────────────────────────────────
+        val startTime = System.currentTimeMillis()
         interpreter?.run(inputBuffer, outputBuffer)
+        val elapsed = System.currentTimeMillis() - startTime
+        Log.d("PERF", "TFLite audio emotion tagging: ${elapsed}ms | uri: $audioUri")
+        // ─────────────────────────────────────────────────────────────────
+
 
         // Parse output
         outputBuffer.rewind()

@@ -35,10 +35,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.example.fypdraft.data.repository.FavoritesRepository
+import com.example.fypdraft.model.SongRecommendation
 import com.example.fypdraft.ui.theme.AppThemeState
 import com.example.fypdraft.ui.theme.animatedMoodBrush
 import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
@@ -58,10 +61,28 @@ fun MusicPlayerScreen(
     val moodBrush = animatedMoodBrush(themeState)
 
     var likeState by remember(currentTrack?.id) { mutableIntStateOf(0) }
+    var likeDocId by remember(currentTrack?.id) { mutableStateOf<String?>(null) }
     var triggerCelebration by remember { mutableStateOf(false) }
     var shuffleActive by remember { mutableStateOf(false) }
     var repeatActive by remember { mutableStateOf(false) }
     var showBottomSheet by remember { mutableStateOf(false) }
+
+    val scope         = rememberCoroutineScope()
+    val favoritesRepo = remember { FavoritesRepository() }
+
+    // Load existing like state whenever track changes
+    LaunchedEffect(currentTrack?.id) {
+        likeState = 0
+        likeDocId = null
+        val track = currentTrack ?: return@LaunchedEffect
+        try {
+            val result = favoritesRepo.findFavorite(track.name, track.artist)
+            if (result != null) {
+                likeState = 1
+                likeDocId = result
+            }
+        } catch (_: Exception) {}
+    }
 
     if (currentTrack == null) {
         Box(Modifier.fillMaxSize().background(moodBrush), contentAlignment = Alignment.Center) {
@@ -131,6 +152,31 @@ fun MusicPlayerScreen(
                             val wasActive = likeState == 1
                             likeState = if (wasActive) 0 else 1
                             if (!wasActive) triggerCelebration = true
+                            scope.launch {
+                                val track = currentTrack ?: return@launch
+                                try {
+                                    if (!wasActive) {
+                                        // Save to Firestore favorites
+                                        val docId = favoritesRepo.saveFavoriteGetId(
+                                            SongRecommendation(
+                                                artist = track.artist,
+                                                title  = track.name,
+                                                reason = "Liked from player",
+                                                youtubeVideoId = ""
+                                            )
+                                        )
+                                        likeDocId = docId
+                                    } else {
+                                        // Remove from Firestore favorites
+                                        val docId = likeDocId
+                                            ?: favoritesRepo.findFavorite(track.name, track.artist)
+                                        if (docId != null) {
+                                            favoritesRepo.removeFavorite(docId)
+                                            likeDocId = null
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            }
                         })
                     }
 

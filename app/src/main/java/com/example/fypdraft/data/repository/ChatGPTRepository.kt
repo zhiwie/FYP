@@ -34,10 +34,19 @@ class ChatRepository {
                 addAll(conversationHistory.takeLast(20))
             }
 
+//            val response = NetworkModule.chatGPTApi.sendMessage(
+//                authorization = "Bearer ${AppConfig.OPENAI_API_KEY}",
+//                request = ChatGPTRequest(messages = messages)
+//            )
+
+            val gptStart = System.currentTimeMillis()
             val response = NetworkModule.chatGPTApi.sendMessage(
                 authorization = "Bearer ${AppConfig.OPENAI_API_KEY}",
                 request = ChatGPTRequest(messages = messages)
             )
+            val gptElapsed = System.currentTimeMillis() - gptStart
+            Log.d("PERF", "GPT-3.5-turbo API call: ${gptElapsed}ms")
+
 
             if (!response.isSuccessful) {
                 val err = response.errorBody()?.string() ?: "Unknown error"
