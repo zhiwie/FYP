@@ -14,6 +14,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +32,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -126,7 +132,8 @@ fun SearchScreen(
 
     val scope             = rememberCoroutineScope()
     val searchHistoryRepo = remember { SearchHistoryRepository() }
-    val spotifyMusicRepo  = remember(spotifyRepository) { spotifyRepository?.let { SpotifyMusicRepository(it) } }
+    val context = LocalContext.current
+    val spotifyMusicRepo  = remember(spotifyRepository) { spotifyRepository?.let { SpotifyMusicRepository.getInstance(it, context) } }
     val hasToken          = spotifyRepository?.getAccessToken() != null
 
     var searchQuery    by remember { mutableStateOf("") }
@@ -560,7 +567,7 @@ private fun SearchResultItem(
             Spacer(Modifier.width(8.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Icon(Icons.Filled.PlayArrow, null, tint = iconTint, modifier = Modifier.size(22.dp))
-                Icon(Icons.Filled.Chat, "More like this", tint = accentColor.copy(alpha = 0.6f), modifier = Modifier.size(14.dp).clickable { onSendToChat() })
+                Icon(Icons.AutoMirrored.Filled.Chat, "More like this", tint = accentColor.copy(alpha = 0.6f), modifier = Modifier.size(14.dp).clickable { onSendToChat() })
             }
         }
     }

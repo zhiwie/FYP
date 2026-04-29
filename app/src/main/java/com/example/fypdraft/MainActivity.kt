@@ -129,7 +129,7 @@ fun AppInitializer(activity: MainActivity, musicPlayerViewModel: MusicPlayerView
                 if (activity.spotifyRepository.isAuthenticated()) {
                     musicPlayerViewModel.connectSpotifyPlayback(activity)
                     musicPlayerViewModel.setSpotifyMusicRepo(
-                        SpotifyMusicRepository(activity.spotifyRepository)
+                        SpotifyMusicRepository.getInstance(activity.spotifyRepository, activity)
                     )
                 }
                 delay(500)
@@ -188,7 +188,7 @@ fun MoodSyncApp(
     LaunchedEffect(spotifyAuthState.isAuthenticated) {
         if (spotifyAuthState.isAuthenticated) {
             musicPlayerViewModel.connectSpotifyPlayback(activity)
-            musicPlayerViewModel.setSpotifyMusicRepo(SpotifyMusicRepository(spotifyRepository))
+            musicPlayerViewModel.setSpotifyMusicRepo(SpotifyMusicRepository.getInstance(spotifyRepository, activity))
         }
     }
 

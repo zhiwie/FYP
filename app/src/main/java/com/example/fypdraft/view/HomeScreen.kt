@@ -14,6 +14,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -179,7 +184,7 @@ fun HomeScreen(
     val personalityEngine   = remember { PetPersonalityEngine() }
     val personalityProfile  by personalityEngine.profile.collectAsState()
     val spotifyMusicRepo    = remember(spotifyRepository) {
-        spotifyRepository?.let { SpotifyMusicRepository(it) }
+        spotifyRepository?.let { SpotifyMusicRepository.getInstance(it, context) }
     }
 
     val spotifyAuthState by spotifyRepository?.authState?.collectAsState()
@@ -395,50 +400,64 @@ fun HomeScreen(
                 return@LaunchedEffect
             }
 
+            // ── Rate-limit check — don't fire any request while blocked ─────
+            if (spotifyMusicRepo.isRateLimited()) {
+                val waitSec = spotifyMusicRepo.rateLimitRemainingSeconds()
+                loadError = "⏳ Spotify rate limit active. Retrying in ${waitSec}s…"
+                isLoading = false
+                return@LaunchedEffect
+            }
+
             // ── Personalised section generation ──────────────────────────
+            // Cap at 5 sections; fetch SEQUENTIALLY to respect rate-limit gate.
             val recommended = MoodAwareRecommender.generateSections(
                 currentMood        = mascotMood.mood,
                 personalityProfile = personalityProfile,
                 isUserOverride     = mascotMood.isUserOverride,
                 rlEngine           = rlEngine,
                 tasteProfile       = tasteProfile
-            )
+            ).take(5)
 
             data class SectionDef(val title: String, val emoji: String, val query: String)
-            val deferreds = recommended
-                .map { SectionDef(it.title, it.emoji, it.query) }
-                .map { def ->
-                    def to async {
-                        try {
-                            if (def.query == "PERSONALIZED") {
-                                val top   = try { spotifyMusicRepo.getPersonalizedTracks(5) }
-                                catch (_: Exception) { emptyList() }
-                                val q     = rlEngine.getMoodSearchQuery(mascotMood.mood)
-                                    .ifBlank { mascotMood.mood }
-                                val mood2 = try { spotifyMusicRepo.searchTracks(q, 5) }
-                                catch (_: Exception) { emptyList() }
-                                val b = mutableListOf<Track>()
-                                for (i in 0 until maxOf(top.size, mood2.size)) {
-                                    if (i < top.size)  b.add(top[i])
-                                    if (i < mood2.size) b.add(mood2[i])
-                                }
-                                b.distinctBy { it.id }
-                            } else {
-                                spotifyMusicRepo.searchTracks(def.query, 10)
-                            }
-                        } catch (_: Exception) { emptyList() }
-                    }
-                }
 
             val results = mutableListOf<MusicSection>()
-            for ((def, d) in deferreds) {
-                val t = d.await()
-                if (t.isNotEmpty()) results.add(MusicSection(def.title, def.emoji, t))
+            for (sec in recommended) {
+                // Re-check rate limit before each section
+                if (spotifyMusicRepo.isRateLimited()) {
+                    val waitSec = spotifyMusicRepo.rateLimitRemainingSeconds()
+                    Log.w("HomeScreen", "Rate-limited mid-load — stopping (${waitSec}s remaining)")
+                    break
+                }
+                val def = SectionDef(sec.title, sec.emoji, sec.query)
+                try {
+                    val tracks = if (def.query == "PERSONALIZED") {
+                        val top   = try { spotifyMusicRepo.getPersonalizedTracks(5) }
+                        catch (_: Exception) { emptyList() }
+                        val q     = rlEngine.getMoodSearchQuery(mascotMood.mood).ifBlank { mascotMood.mood }
+                        val mood2 = try { spotifyMusicRepo.searchTracks(q, 5) }
+                        catch (_: Exception) { emptyList() }
+                        val b = mutableListOf<Track>()
+                        for (i in 0 until maxOf(top.size, mood2.size)) {
+                            if (i < top.size)  b.add(top[i])
+                            if (i < mood2.size) b.add(mood2[i])
+                        }
+                        b.distinctBy { it.id }
+                    } else {
+                        spotifyMusicRepo.searchTracks(def.query, 10)
+                    }
+                    if (tracks.isNotEmpty()) {
+                        results.add(MusicSection(def.title, def.emoji, tracks))
+                        sections = results.toList()   // progressive render
+                    }
+                } catch (_: Exception) { /* skip failed section, continue */ }
             }
             sections  = results
             hasLoaded = true
             if (sections.isEmpty()) {
-                if (spotifyRepository?.getAccessToken() == null) {
+                if (spotifyMusicRepo.isRateLimited()) {
+                    val waitSec = spotifyMusicRepo.rateLimitRemainingSeconds()
+                    loadError = "⏳ Spotify requests are paused. Try again in ${waitSec}s."
+                } else if (spotifyRepository?.getAccessToken() == null) {
                     loadError = "Session expired."
                     spotifyRepository?.markTokenExpired()
                 } else {
@@ -447,6 +466,22 @@ fun HomeScreen(
             }
         } catch (e: Exception) { loadError = "Failed: ${e.message}" }
         isLoading = false
+    }
+
+    // ── Auto-retry poller — when rate-limited, re-check every 15 s ──────────
+    // When the rate-limit window expires this sets hasLoaded=false which
+    // re-triggers the main LaunchedEffect above for a clean retry.
+    LaunchedEffect(isSpotifyConnected) {
+        while (true) {
+            delay(15_000)
+            val repo = spotifyMusicRepo ?: continue
+            if (!repo.isRateLimited() && loadError?.startsWith("⏳") == true) {
+                // Rate-limit window just expired — clear error and trigger reload
+                loadError  = null
+                hasLoaded  = false
+                sections   = emptyList()
+            }
+        }
     }
 
     val isDark             = themeState.isDark
@@ -460,7 +495,6 @@ fun HomeScreen(
                 displayName   = displayName,
                 email         = currentUser?.email ?: "",
                 isDark        = isDark,
-                themeState    = themeState,
                 onSettings    = { scope.launch { drawerState.close() }; onNavigateToSettings() },
                 onSpotify     = { scope.launch { drawerState.close() }; onNavigateToSpotify() },
                 onMoodHistory = { scope.launch { drawerState.close() }; onNavigateToMoodHistory() },
@@ -577,11 +611,6 @@ fun HomeScreen(
                             checkInState       = checkInState,
                             onCheckIn          = { mood -> checkInVm.checkIn(mood) },
                             onCheckInRaw       = { key -> checkInVm.checkInRaw(key) },
-                            onMoodPick         = { moodKey ->
-                                // Update mascot mood → triggers theme + recommendation refresh
-                                mascotMood = MascotMoodDetector.getMoodForKey(moodKey).copy(isUserOverride = true)
-                                onMoodSelected(moodKey)
-                            },
                             themeState         = themeState
                         )
                     }
@@ -613,29 +642,22 @@ fun HomeScreen(
                                 color = secondaryTextColor)
                         }
 
-                        loadError != null -> Card(
-                            Modifier.fillMaxWidth().padding(16.dp)
-                                .clickable {
-                                    hasLoaded = false
-                                    loadError = null
-                                    sections  = emptyList()
-                                },
-                            shape  = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800))
-                        ) {
-                            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Refresh, null, tint = Color.White)
-                                Spacer(Modifier.width(12.dp))
-                                Column {
-                                    Text("Tap to retry",
-                                        color      = Color.White,
-                                        fontWeight = FontWeight.Bold)
-                                    Text(loadError ?: "",
-                                        color    = Color.White.copy(alpha = 0.8f),
-                                        fontSize = 12.sp)
-                                }
+                        loadError != null -> RateLimitOrErrorCard(
+                            error          = loadError ?: "",
+                            isRateLimited  = spotifyMusicRepo?.isRateLimited() == true,
+                            remainingSecs  = spotifyMusicRepo?.rateLimitRemainingSeconds() ?: 0L,
+                            onClearAndRetry = {
+                                spotifyMusicRepo?.clearRateLimit()
+                                hasLoaded = false
+                                loadError = null
+                                sections  = emptyList()
+                            },
+                            onRetry = {
+                                hasLoaded = false
+                                loadError = null
+                                sections  = emptyList()
                             }
-                        }
+                        )
 
                         sections.isEmpty() && hasLoaded -> Box(
                             Modifier.fillMaxWidth().padding(32.dp),
@@ -924,109 +946,90 @@ fun BottomNavBar(
     }
 }
 
-@Composable
-fun MiniMusicPlayer(
-    vm:         MusicPlayerViewModel?,
-    onNav:      () -> Unit,
-    themeState: AppThemeState = AppThemeState()
-) {
-    val ps        = vm?.playerState?.collectAsState()
-    val state     = ps?.value
-    val t         = state?.currentTrack
-    val p         = themeState.activePalette
-    val isPlaying = state?.isPlaying == true
-    // progress: from playerState (0f–1f). For Spotify tracks fetched at launch
-    // via refreshFromSpotify this will be non-zero; for last-played-offline it
-    // stays at 0, which shows an empty bar — correct UX for "not currently playing".
-    val progress  = state?.progress?.coerceIn(0f, 1f) ?: 0f
+// ─────────────────────────────────────────────────────────────────────────────
+//  Rate-limit / error card shown in the HomeScreen music section
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // Poll Spotify every 5 s so the bar always reflects what's actually playing,
-    // including tracks started outside the app.
-    LaunchedEffect(vm) {
-        while (true) {
-            delay(5_000)
-            vm?.refreshFromSpotify()
+@Composable
+private fun RateLimitOrErrorCard(
+    error          : String,
+    isRateLimited  : Boolean,
+    remainingSecs  : Long,
+    onClearAndRetry: () -> Unit,
+    onRetry        : () -> Unit
+) {
+    // Live countdown — ticks every second while rate-limited
+    var countdown by remember(remainingSecs) { mutableStateOf(remainingSecs) }
+    LaunchedEffect(isRateLimited, remainingSecs) {
+        if (!isRateLimited) return@LaunchedEffect
+        countdown = remainingSecs
+        while (countdown > 0) {
+            delay(1_000)
+            countdown--
         }
     }
 
-    val bg = if (themeState.isDark) p.darkSurface else p.darkTop.copy(alpha = 0.95f)
+    val cardColor   = if (isRateLimited) Color(0xFF37474F) else Color(0xFFFF9800)
+    val titleText   = if (isRateLimited) "Spotify rate limit" else "Couldn't load music"
+    val bodyText    = if (isRateLimited)
+        "Spotify asked us to wait. Auto-retrying when the window expires."
+    else error
 
     Card(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clickable { onNav() },
-        colors    = CardDefaults.cardColors(containerColor = bg),
-        shape     = RoundedCornerShape(14.dp),
-        elevation = CardDefaults.cardElevation(4.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        shape  = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = cardColor)
     ) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Album art / placeholder
-                Card(Modifier.size(40.dp), shape = RoundedCornerShape(8.dp)) {
-                    if (t != null && t.albumArtUrl.isNotEmpty())
-                        AsyncImage(t.albumArtUrl, null,
-                            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    else Box(Modifier.fillMaxSize().background(p.accent.copy(alpha = 0.5f)),
-                        contentAlignment = Alignment.Center) { Text("🎵", fontSize = 16.sp) }
-                }
-                Spacer(Modifier.width(12.dp))
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Schedule, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    if (t != null) {
-                        // "Now Playing" in Spotify green, "Last Played" dimmed
-                        Text(
-                            text       = if (isPlaying) "Now Playing" else "Last Played",
-                            fontSize   = 9.sp,
-                            fontWeight = FontWeight.Medium,
-                            color      = if (isPlaying) Color(0xFF1DB954)
-                            else Color.White.copy(alpha = 0.45f),
-                            maxLines   = 1
-                        )
-                        Text(t.name,   fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                            color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f),
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    } else {
-                        Text("No track played yet", fontSize = 13.sp,
-                            color = Color.White.copy(alpha = 0.5f), maxLines = 1)
-                        Text("Tap to open player", fontSize = 11.sp,
-                            color = Color.White.copy(alpha = 0.35f), maxLines = 1)
-                    }
-                }
-                if (t != null) {
-                    IconButton(onClick = { vm?.togglePlayPause() }) {
-                        Icon(
-                            if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            "PlayPause", tint = Color.White
-                        )
-                    }
-                } else {
-                    IconButton(onClick = onNav) {
-                        Icon(Icons.Filled.MusicNote, "Open Player",
-                            tint = Color.White.copy(alpha = 0.5f))
-                    }
+                    Text(titleText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(bodyText,  color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
                 }
             }
 
-            // ── Progress bar (always rendered, 0 when paused/offline) ──────
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .padding(horizontal = 4.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(Color.White.copy(alpha = 0.15f))
-            ) {
-                if (progress > 0f) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(progress)
-                            .fillMaxHeight()
-                            .background(
-                                if (isPlaying) p.accent
-                                else Color.White.copy(alpha = 0.45f)
-                            )
-                    )
+            if (isRateLimited && countdown > 0) {
+                Spacer(Modifier.height(10.dp))
+                // Countdown progress bar
+                val totalSecs = remainingSecs.coerceAtLeast(1L).toFloat()
+                val progress  = (countdown.toFloat() / totalSecs).coerceIn(0f, 1f)
+                LinearProgressIndicator(
+                    progress         = { 1f - progress },
+                    modifier         = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                    color            = Color(0xFF80CBC4),
+                    trackColor       = Color.White.copy(alpha = 0.2f)
+                )
+                Spacer(Modifier.height(6.dp))
+                val mins = countdown / 60
+                val secs = countdown % 60
+                Text(
+                    if (mins > 0) "Retrying in ${mins}m ${secs}s…" else "Retrying in ${secs}s…",
+                    color    = Color.White.copy(alpha = 0.65f),
+                    fontSize = 11.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                // "I've waited — try now" button in case SharedPrefs has a stale timestamp
+                OutlinedButton(
+                    onClick = onClearAndRetry,
+                    border  = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Refresh, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Force retry now", color = Color.White, fontSize = 13.sp)
+                }
+            } else if (!isRateLimited) {
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = onRetry,
+                    colors  = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.2f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Refresh, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Retry", color = Color.White, fontSize = 13.sp)
                 }
             }
         }
@@ -1034,37 +1037,69 @@ fun MiniMusicPlayer(
 }
 
 @Composable
-private fun ProfileDrawerContent(
-    displayName:   String,
-    email:         String,
-    isDark:        Boolean = false,
-    themeState:    AppThemeState = AppThemeState(),
-    onSettings:    () -> Unit,
-    onSpotify:     () -> Unit,
-    onMoodHistory: () -> Unit,
-    onSignOut:     () -> Unit
+fun MiniMusicPlayer(
+    vm:         MusicPlayerViewModel?,
+    onNav:      () -> Unit,
+    themeState: AppThemeState = AppThemeState()
 ) {
-    val p   = themeState.activePalette
-    // Dark mode  → darkest shade of the active palette  (darkBottom)
-    // Light mode → lightest shade of the active palette (lightSurface)
-    val bg  = if (isDark) p.darkBottom else p.lightSurface
-    // Avatar chip: one tone up from the drawer bg
-    val av  = if (isDark) p.darkSurface else p.lightBottom
-    val tc  = if (isDark) Color(0xFFE8E8F0)            else Color(0xFF1A1A2E)
-    val sc  = if (isDark) p.darkTextSub                else p.lightTextSub
-    val div = if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.08f)
+    val ps = vm?.playerState?.collectAsState()
+    val t  = ps?.value?.currentTrack ?: return
+    val p  = themeState.activePalette
+    val bg = if (themeState.isDark) p.darkSurface else p.darkTop.copy(alpha = 0.95f)
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clickable { onNav() },
+        colors    = CardDefaults.cardColors(containerColor = bg),
+        shape     = RoundedCornerShape(14.dp),
+        elevation = CardDefaults.cardElevation(4.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Card(Modifier.size(40.dp), shape = RoundedCornerShape(8.dp)) {
+                if (t.albumArtUrl.isNotEmpty())
+                    AsyncImage(t.albumArtUrl, null,
+                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else Box(Modifier.fillMaxSize().background(p.accent.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.Center) { Text("🎵", fontSize = 16.sp) }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(t.name,   fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = { vm?.togglePlayPause() }) {
+                Icon(
+                    if (ps.value.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    "PlayPause", tint = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileDrawerContent(
+    displayName:  String,
+    email:        String,
+    isDark:       Boolean = false,
+    onSettings:   () -> Unit,
+    onSpotify:    () -> Unit,
+    onMoodHistory: () -> Unit,
+    onSignOut:    () -> Unit
+) {
+    val bg  = if (isDark) Color(0xFF1C1C2E) else Color.White
+    val tc  = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val sc  = if (isDark) Color(0xFF888899) else Color(0xFF666677)
+    val av  = if (isDark) Color(0xFF2A2A4A) else Color(0xFF1A1A2E)
+    val div = if (isDark) Color(0xFF2A2A3A) else Color(0xFFEEEEEE)
     ModalDrawerSheet(Modifier.width(300.dp), drawerContainerColor = bg) {
         Column(Modifier.padding(24.dp)) {
             Spacer(Modifier.height(32.dp))
-            Box(
-                Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    // Light theme: use accent (vivid palette colour) so it pops against the
-                    // pale lightSurface drawer background. Dark theme: darkSurface as before.
-                    .background(if (isDark) av else p.accent),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(Modifier.size(72.dp).clip(CircleShape).background(av),
+                contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Person, null, tint = Color.White, modifier = Modifier.size(36.dp))
             }
             Spacer(Modifier.height(16.dp))
@@ -1079,7 +1114,7 @@ private fun ProfileDrawerContent(
             Spacer(Modifier.weight(1f))
             HorizontalDivider(color = div)
             Spacer(Modifier.height(12.dp))
-            DrawerItem(Icons.Filled.Logout, "Sign Out", onSignOut, Color.Red)
+            DrawerItem(Icons.AutoMirrored.Filled.Logout, "Sign Out", onSignOut, Color.Red)
         }
     }
 }

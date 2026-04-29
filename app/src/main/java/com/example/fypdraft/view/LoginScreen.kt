@@ -88,7 +88,7 @@ fun LoginScreen(
                 value         = emailOrUsername,
                 onValueChange = { emailOrUsername = it },
                 modifier      = Modifier.fillMaxWidth(),
-                label         = { Text("Username or email address") },
+                label         = { Text("Email address") },
                 singleLine    = true,
                 shape         = RoundedCornerShape(28.dp),
                 textStyle     = LocalTextStyle.current.copy(color = BodyText),

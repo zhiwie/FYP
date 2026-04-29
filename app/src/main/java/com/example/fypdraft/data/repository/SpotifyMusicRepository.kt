@@ -1,8 +1,13 @@
 package com.example.fypdraft.data.repository
 
+import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import com.example.fypdraft.model.Track
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,8 +25,15 @@ import java.util.concurrent.TimeUnit
  *
  * All "recommendation" functionality now uses /search with curated queries.
  */
-class SpotifyMusicRepository(
-    private val spotifyRepository: SpotifyRepository
+/**
+ * Singleton — all screens share ONE instance so the rate-limit gate and
+ * response cache survive across navigation and app restarts.
+ *
+ * Use [SpotifyMusicRepository.getInstance] instead of the constructor.
+ */
+class SpotifyMusicRepository private constructor(
+    private val spotifyRepository: SpotifyRepository,
+    context: Context
 ) {
     private val TAG     = "SpotifyMusicRepo"
     private val client  = OkHttpClient.Builder()
@@ -29,6 +41,120 @@ class SpotifyMusicRepository(
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
     private val baseUrl = "https://api.spotify.com/v1"
+
+    // ── SharedPreferences for persisting rate-limit across restarts ──
+    private val prefs: SharedPreferences =
+        context.applicationContext.getSharedPreferences("spotify_music_repo_prefs", Context.MODE_PRIVATE)
+    private val KEY_RATE_LIMIT_UNTIL = "rate_limited_until_ms"
+
+    companion object {
+        @Volatile private var INSTANCE: SpotifyMusicRepository? = null
+
+        /**
+         * Returns the singleton, creating it if necessary.
+         * Pass the same [spotifyRepository] singleton and any [Context].
+         */
+        fun getInstance(spotifyRepository: SpotifyRepository, context: Context): SpotifyMusicRepository =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: SpotifyMusicRepository(spotifyRepository, context.applicationContext)
+                    .also { INSTANCE = it }
+            }
+
+        /** Clear the singleton (e.g. on sign-out). */
+        fun clearInstance() { INSTANCE = null }
+    }
+
+    // ── Rate-limit gate with exponential backoff ────────────────────
+    // rateLimitedUntilMs: absolute epoch-ms we must not send requests before.
+    // Persisted so a 429 in session N blocks session N+1 too.
+    @Volatile private var rateLimitedUntilMs: Long =
+        prefs.getLong(KEY_RATE_LIMIT_UNTIL, 0L)
+
+    // Tracks how many consecutive 429s we have received, used for backoff.
+    // Also persisted so repeated app restarts don't reset the penalty.
+    private val KEY_BACKOFF_COUNT = "rate_limit_backoff_count"
+    @Volatile private var backoffCount: Int =
+        prefs.getInt(KEY_BACKOFF_COUNT, 0)
+
+    // Base backoff: 120 s * 2^backoffCount, capped at 30 minutes.
+    private val BASE_BACKOFF_SEC = 120L
+    private val MAX_BACKOFF_SEC  = 30 * 60L   // 30 minutes
+
+    private fun computeBackoffMs(): Long {
+        val secs = (BASE_BACKOFF_SEC * (1L shl backoffCount.coerceAtMost(7)))
+            .coerceAtMost(MAX_BACKOFF_SEC)
+        return secs * 1000L
+    }
+
+    private fun setRateLimitedUntil(retryAfterSec: Long) {
+        // Use whichever is larger: server Retry-After or our own backoff
+        val backoffMs    = computeBackoffMs()
+        val serverMs     = retryAfterSec * 1000L
+        val chosenMs     = maxOf(backoffMs, serverMs)
+        rateLimitedUntilMs = System.currentTimeMillis() + chosenMs
+        backoffCount++
+        prefs.edit()
+            .putLong(KEY_RATE_LIMIT_UNTIL,  rateLimitedUntilMs)
+            .putInt (KEY_BACKOFF_COUNT,      backoffCount)
+            .apply()
+        Log.w(TAG, "429 backoff #$backoffCount — waiting ${chosenMs/1000}s " +
+                "(server asked ${retryAfterSec}s, backoff=${backoffMs/1000}s)")
+    }
+
+    /** Call after a successful non-429 response to reset the backoff counter. */
+    private fun resetBackoff() {
+        if (backoffCount > 0) {
+            backoffCount = 0
+            prefs.edit().putInt(KEY_BACKOFF_COUNT, 0).apply()
+        }
+    }
+
+    /**
+     * Manually clear the rate-limit gate and reset backoff.
+     * Call this when the user explicitly taps "retry" after the window
+     * should have expired — e.g. if SharedPrefs has a stale future timestamp.
+     */
+    fun clearRateLimit() {
+        rateLimitedUntilMs = 0L
+        backoffCount       = 0
+        prefs.edit()
+            .putLong(KEY_RATE_LIMIT_UNTIL, 0L)
+            .putInt (KEY_BACKOFF_COUNT,    0)
+            .apply()
+        Log.d(TAG, "Rate limit manually cleared")
+    }
+
+    /** Returns true if we are currently inside a rate-limit window. */
+    fun isRateLimited(): Boolean = System.currentTimeMillis() < rateLimitedUntilMs
+
+    /** Remaining seconds in the rate-limit window (0 if not limited). */
+    fun rateLimitRemainingSeconds(): Long =
+        ((rateLimitedUntilMs - System.currentTimeMillis()) / 1000L).coerceAtLeast(0L)
+
+    // Serialises all HTTP calls so we never fire them concurrently.
+    private val requestMutex = Mutex()
+    private val MIN_REQUEST_GAP_MS = 500L   // wider gap — be gentle with the API
+    @Volatile private var lastRequestMs: Long = 0L
+
+    // ── Response cache ───────────────────────────────────────────────
+    // 10-minute TTL in-memory cache (keyed by query+limit).
+    private val cache = mutableMapOf<String, Pair<List<Track>, Long>>()
+    private val CACHE_TTL_MS = 10 * 60 * 1000L
+
+    private fun cacheKey(query: String, limit: Int) = "$query|$limit"
+
+    private fun getFromCache(key: String): List<Track>? {
+        val (tracks, expiry) = cache[key] ?: return null
+        return if (System.currentTimeMillis() < expiry) tracks else { cache.remove(key); null }
+    }
+
+    private fun putInCache(key: String, tracks: List<Track>) {
+        cache[key] = tracks to (System.currentTimeMillis() + CACHE_TTL_MS)
+        if (cache.size > 50) {
+            val now = System.currentTimeMillis()
+            cache.entries.removeIf { (_, v) -> v.second < now }
+        }
+    }
 
     private fun getToken(): String? {
         val token = spotifyRepository.getAccessToken()
@@ -42,25 +168,51 @@ class SpotifyMusicRepository(
             .addHeader("Authorization", "Bearer $token")
             .build()
 
-    private fun execute(request: Request): String? {
-        return try {
+    /**
+     * Thread-safe HTTP execute with:
+     *   • 429 gate  — returns null immediately if we're still rate-limited
+     *   • min gap   — enforces ≥300 ms between successive requests
+     *   • 429 latch — on receiving a 429, sets the gate for Retry-After seconds
+     *                 (capped at 120 s so we don't block indefinitely on bad headers)
+     */
+    private suspend fun execute(request: Request): String? = requestMutex.withLock {
+        // Honour any active rate-limit window
+        val now = System.currentTimeMillis()
+        if (now < rateLimitedUntilMs) {
+            val waitSec = (rateLimitedUntilMs - now) / 1000
+            Log.w(TAG, "Rate-limited — skipping request (${waitSec}s remaining)")
+            return@withLock null
+        }
+
+        // Enforce minimum gap between requests
+        val sinceLastMs = now - lastRequestMs
+        if (sinceLastMs < MIN_REQUEST_GAP_MS) {
+            delay(MIN_REQUEST_GAP_MS - sinceLastMs)
+        }
+        lastRequestMs = System.currentTimeMillis()
+
+        return@withLock try {
             val response = client.newCall(request).execute()
             val body     = response.body?.string()
             when {
                 response.code == 401 -> {
-                    Log.e(TAG, "401 Unauthorized for ${request.url} — token may be expired")
+                    Log.e(TAG, "401 Unauthorized — token may be expired")
                     null
                 }
                 response.code == 429 -> {
-                    val retryAfter = response.header("Retry-After", "?")
-                    Log.w(TAG, "429 Rate limited — retry after ${retryAfter}s")
+                    val retryAfterSec = response.header("Retry-After")?.toLongOrNull()
+                        ?.coerceIn(1L, MAX_BACKOFF_SEC) ?: BASE_BACKOFF_SEC
+                    setRateLimitedUntil(retryAfterSec)   // exponential backoff applied here
                     null
                 }
                 !response.isSuccessful -> {
                     Log.e(TAG, "API [${response.code}] ${request.url}: ${body?.take(300)}")
                     null
                 }
-                else -> body
+                else -> {
+                    resetBackoff()   // successful response — reset penalty counter
+                    body
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Network error for ${request.url}", e)
@@ -74,10 +226,26 @@ class SpotifyMusicRepository(
 
     suspend fun searchTracks(query: String, limit: Int = 10, startOffset: Int = 0): List<Track> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
-        val token   = getToken() ?: return@withContext emptyList()
+        // Hard gate — never make a network call while rate-limited
+        if (isRateLimited()) {
+            Log.w(TAG, "searchTracks blocked — rate-limited (${rateLimitRemainingSeconds()}s remaining)")
+            return@withContext emptyList()
+        }
+
+        // Return cached result if still fresh (only when not using a custom offset)
+        if (startOffset == 0) {
+            val key    = cacheKey(query, limit)
+            val cached = getFromCache(key)
+            if (cached != null) {
+                Log.d(TAG, "Cache hit: '$query' (${cached.size} tracks)")
+                return@withContext cached
+            }
+        }
+
+        val token = getToken() ?: return@withContext emptyList()
 
         val allTracks = mutableListOf<Track>()
-        var offset    = startOffset   // start from caller-supplied offset for variety on refresh
+        var offset    = startOffset
         val desired   = limit.coerceAtLeast(1)
         var done      = false
 
@@ -92,14 +260,14 @@ class SpotifyMusicRepository(
                 .addQueryParameter("offset", offset.toString())
                 .build()
 
-            val request    = Request.Builder().url(httpUrl).addHeader("Authorization", "Bearer $token").build()
-//            val body       = execute(request) ?: break
-            val searchStart = System.currentTimeMillis()
+            val request = Request.Builder()
+                .url(httpUrl)
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+
             val body = execute(request) ?: break
-            val searchElapsed = System.currentTimeMillis() - searchStart
-            Log.d("PERF", "Spotify keyword search: ${searchElapsed}ms | query: $query")
-            val tracksObj  = JSONObject(body).optJSONObject("tracks") ?: break
-            val items      = tracksObj.optJSONArray("items") ?: break
+            val tracksObj = JSONObject(body).optJSONObject("tracks") ?: break
+            val items     = tracksObj.optJSONArray("items") ?: break
             if (items.length() == 0) break
 
             val pageTracks = parseTracks(items)
@@ -108,8 +276,11 @@ class SpotifyMusicRepository(
             if (pageTracks.size < pageSize) done = true
         }
 
-        // ── FIX: deduplicate at search level too ──────────────────────
-        allTracks.distinctBy { it.id }
+        val result = allTracks.distinctBy { it.id }
+        if (result.isNotEmpty() && startOffset == 0) {
+            putInCache(cacheKey(query, limit), result)
+        }
+        result
     }
 
     // ── Playlist tracks ──────────────────────────────────────────────
@@ -287,6 +458,7 @@ class SpotifyMusicRepository(
 
     suspend fun getUserTopTracks(limit: Int = 5, timeRange: String = "short_term"): List<Track> =
         withContext(Dispatchers.IO) {
+            if (isRateLimited()) return@withContext emptyList()
             val token     = getToken() ?: return@withContext emptyList()
             val safeLimit = limit.coerceIn(1, 50)
             val url       = "$baseUrl/me/top/tracks?limit=$safeLimit&time_range=$timeRange"

@@ -37,6 +37,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Check
@@ -66,7 +71,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -82,6 +86,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -127,9 +132,10 @@ fun FriendsScreen(
     val secondaryText = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
 
     val scope            = rememberCoroutineScope()
+    val context          = LocalContext.current
     val socialRepo       = remember { SocialRepository() }
     val spotifyMusicRepo = remember(spotifyRepository) {
-        spotifyRepository?.let { SpotifyMusicRepository(it) }
+        spotifyRepository?.let { SpotifyMusicRepository.getInstance(it, context) }
     }
     val myUid       = FirebaseAuth.getInstance().currentUser?.uid ?: ""
     val currentUser = FirebaseAuth.getInstance().currentUser
@@ -156,36 +162,16 @@ fun FriendsScreen(
     var vibeHistoryFriend   by remember { mutableStateOf<FriendProfile?>(null) }
     var friendToRemove      by remember { mutableStateOf<FriendProfile?>(null) }
 
-    // ── Real-time Firestore listeners ─────────────────────────────────────
-    // Friends list + their moments: updates instantly when any friend changes
-    // what they're playing, or when friends are added/removed.
-    DisposableEffect(myUid) {
-        if (myUid.isEmpty()) {
-            isLoading = false
-            return@DisposableEffect onDispose {}
-        }
-
-        val friendsListener = socialRepo.listenToFriendsRealTime { updatedFriends ->
-            friends      = updatedFriends
-            activityFeed = buildActivityFeed(updatedFriends, myMoment)
-            isLoading    = false
-        }
-
-        val myMomentListener = socialRepo.listenToMyMoment { updatedMoment ->
-            myMoment     = updatedMoment
-            activityFeed = buildActivityFeed(friends, updatedMoment)
-        }
-
-        onDispose {
-            friendsListener.remove()
-            myMomentListener.remove()
-        }
+    suspend fun refreshAll() {
+        friends      = socialRepo.getFriendsWithProfiles()
+        myMoment     = socialRepo.getMyMoment()
+        activityFeed = buildActivityFeed(friends, myMoment)
     }
 
-    // Fallback: if listeners haven't fired within 8 s, stop the spinner anyway
     LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(8_000)
-        if (isLoading) isLoading = false
+        isLoading = true
+        try { refreshAll() } catch (e: Exception) { Log.e("FriendsScreen", "Load failed", e) }
+        isLoading = false
     }
 
     val playerState  = musicPlayerViewModel?.playerState?.collectAsState()
@@ -292,8 +278,9 @@ fun FriendsScreen(
                                     moment = moment, isOwn = false, primaryText = primaryText, isDark = isDark,
                                     onReact = { emoji ->
                                         scope.launch {
-                                            // Write reaction; real-time listener auto-refreshes UI
                                             socialRepo.reactToMoment(f.uid, emoji)
+                                            friends      = socialRepo.getFriendsWithProfiles()
+                                            activityFeed = buildActivityFeed(friends, myMoment)
                                         }
                                     },
                                     onPlay = { musicPlayerViewModel?.playFromRecommendation(moment.trackTitle, moment.trackArtist) { _, _ -> } },
@@ -341,7 +328,7 @@ fun FriendsScreen(
                         val doc   = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
                         val uname = doc.getString("username")
                         if (uname != null) {
-                            socialRepo.addFriend(uname).fold(onSuccess = { /* listener auto-refreshes */ }, onFailure = { addError = it.message; showAddDialog = true })
+                            socialRepo.addFriend(uname).fold(onSuccess = { refreshAll() }, onFailure = { addError = it.message; showAddDialog = true })
                         } else { addError = "User not found for this QR code"; showAddDialog = true }
                     }
                 },
@@ -371,8 +358,7 @@ fun FriendsScreen(
             onPost = { title, artist, albumArt, spotifyUri, caption, mood ->
                 scope.launch {
                     socialRepo.postVibeCheck(title, artist, albumArt, spotifyUri, mood, caption, myMascotType)
-                    // myMoment listener auto-updates after the write
-                    showVibeCheckDialog = false
+                    myMoment = socialRepo.getMyMoment(); activityFeed = buildActivityFeed(friends, myMoment); showVibeCheckDialog = false
                 }
             })
     }
@@ -385,12 +371,12 @@ fun FriendsScreen(
             onDismiss  = { showAddDialog = false; addError = null },
             onScanQr   = { showAddDialog = false; showQrScanner = true },
             onShowMyQr = { showAddDialog = false; showQrDialog = true },
-            onAdd      = { username -> scope.launch { socialRepo.addFriend(username).fold(onSuccess = { showAddDialog = false; addError = null }, onFailure = { addError = it.message }) } },
+            onAdd      = { username -> scope.launch { socialRepo.addFriend(username).fold(onSuccess = { showAddDialog = false; addError = null; refreshAll() }, onFailure = { addError = it.message }) } },
             onAddByUid = { uid ->
                 scope.launch {
                     val doc   = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
                     val uname = doc.getString("username") ?: return@launch
-                    socialRepo.addFriend(uname).fold(onSuccess = { showAddDialog = false; addError = null }, onFailure = { addError = it.message })
+                    socialRepo.addFriend(uname).fold(onSuccess = { showAddDialog = false; addError = null; refreshAll() }, onFailure = { addError = it.message })
                 }
             }
         )
@@ -403,20 +389,8 @@ fun FriendsScreen(
             title = { Text("Remove Friend", fontWeight = FontWeight.Bold) },
             text  = { Text("Remove ${removingFriend.displayName} from your friends? They won't be notified.") },
             confirmButton = {
-                Button(onClick = {
-                    val removedUid = removingFriend.uid
-                    scope.launch {
-                        socialRepo.removeFriend(removedUid).fold(
-                            onSuccess = {
-                                // Optimistic removal so UI is instant; real-time listener confirms
-                                friends      = friends.filter { it.uid != removedUid }
-                                activityFeed = buildActivityFeed(friends, myMoment)
-                                friendToRemove = null
-                            },
-                            onFailure = { friendToRemove = null }
-                        )
-                    }
-                }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Remove") }
+                Button(onClick = { scope.launch { socialRepo.removeFriend(removingFriend.uid).fold(onSuccess = { friendToRemove = null; refreshAll() }, onFailure = { friendToRemove = null }) } },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Remove") }
             },
             dismissButton = { TextButton(onClick = { friendToRemove = null }) { Text("Cancel") } }
         )
@@ -792,7 +766,7 @@ private fun FriendChatPanel(
         containerColor = Color(0xFFF5F5FA),
         topBar = {
             TopAppBar(
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null, tint = Color(0xFF1A1A2E)) } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color(0xFF1A1A2E)) } },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(38.dp).clip(CircleShape).background(getMoodColor(friend.currentMoment?.mood ?: "neutral").copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
@@ -826,7 +800,7 @@ private fun FriendChatPanel(
                     }
                     IconButton(onClick = { val msg = inputText.trim(); if (msg.isNotBlank()) { inputText = ""; focusMgr.clearFocus(); scope.launch { socialRepo.sendChatMessage(friend.uid, msg) } } },
                         enabled = inputText.isNotBlank(), modifier = Modifier.size(44.dp).clip(CircleShape).background(if (inputText.isNotBlank()) Color(0xFF1A1A2E) else Color(0xFFEEEEEE))) {
-                        Icon(Icons.Filled.Send, null, tint = if (inputText.isNotBlank()) Color.White else Color(0xFF666677))
+                        Icon(Icons.AutoMirrored.Filled.Send, null, tint = if (inputText.isNotBlank()) Color.White else Color(0xFF666677))
                     }
                 }
             }
@@ -1103,7 +1077,7 @@ private fun VibeCheckDialog(
         Surface(shape = RoundedCornerShape(24.dp), color = bgColor, modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp)) {
             Column(Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (step == 1) { IconButton(onClick = { step = 0 }, modifier = Modifier.size(32.dp)) { Icon(Icons.Filled.ArrowBack, null, tint = subColor) }; Spacer(Modifier.width(4.dp)) }
+                    if (step == 1) { IconButton(onClick = { step = 0 }, modifier = Modifier.size(32.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = subColor) }; Spacer(Modifier.width(4.dp)) }
                     Text(if (step == 0) "Choose a Song to Share 🎵" else "Add Your Vibe ✨", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = textColor, modifier = Modifier.weight(1f))
                     IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) { Icon(Icons.Filled.Close, null, tint = subColor) }
                 }

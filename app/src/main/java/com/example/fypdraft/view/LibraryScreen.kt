@@ -14,6 +14,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,9 +78,10 @@ fun LibraryScreen(
     val sheetBg       = if (isDark) Color(0xFF1C1C2E) else Color.White
 
     val scope            = rememberCoroutineScope()
+    val context          = LocalContext.current
     val favoritesRepo    = remember { FavoritesRepository() }
     val spotifyMusicRepo = remember(spotifyRepository) {
-        spotifyRepository?.let { SpotifyMusicRepository(it) }
+        spotifyRepository?.let { SpotifyMusicRepository.getInstance(it, context) }
     }
 
     var favorites        by remember { mutableStateOf<List<Pair<String, SongRecommendation>>>(emptyList()) }
@@ -799,7 +806,7 @@ private fun PlaylistTrackRow(
                         .background(Color(0xFF1DB954).copy(alpha = 0.55f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Filled.VolumeUp, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Icon(Icons.AutoMirrored.Filled.VolumeUp, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             }
         }
