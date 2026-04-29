@@ -16,7 +16,7 @@ object AppConfig {
     const val DEEZER_BASE_URL = "https://api.deezer.com/"
 
     // ── Spotify ────────────────────────────────────────────
-    const val SPOTIFY_CLIENT_ID = "f5bf4e9ecc5e4f32a622aeb60aca64ea"
+    const val SPOTIFY_CLIENT_ID = "667c083092c747f1bef171ed8aacb46e"
     const val SPOTIFY_REDIRECT_URI = "fypdraft://callback"
 
     // ── Timeouts ───────────────────────────────────────────

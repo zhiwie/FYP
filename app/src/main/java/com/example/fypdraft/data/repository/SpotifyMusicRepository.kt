@@ -76,9 +76,11 @@ class SpotifyMusicRepository private constructor(
     @Volatile private var backoffCount: Int =
         prefs.getInt(KEY_BACKOFF_COUNT, 0)
 
-    // Base backoff: 120 s * 2^backoffCount, capped at 30 minutes.
-    private val BASE_BACKOFF_SEC = 120L
-    private val MAX_BACKOFF_SEC  = 30 * 60L   // 30 minutes
+    // Base backoff: 60 s * 2^backoffCount, capped at 5 minutes.
+    // FIX: Was 30 minutes — far too long during development and unnecessary
+    // since fresh OAuth auth now clears the rate limit automatically.
+    private val BASE_BACKOFF_SEC = 60L
+    private val MAX_BACKOFF_SEC  = 5 * 60L    // 5 minutes
 
     private fun computeBackoffMs(): Long {
         val secs = (BASE_BACKOFF_SEC * (1L shl backoffCount.coerceAtMost(7)))
@@ -117,6 +119,7 @@ class SpotifyMusicRepository private constructor(
     fun clearRateLimit() {
         rateLimitedUntilMs = 0L
         backoffCount       = 0
+        lastAuthTimeMs     = System.currentTimeMillis() // stamp so execute() applies grace delay
         prefs.edit()
             .putLong(KEY_RATE_LIMIT_UNTIL, 0L)
             .putInt (KEY_BACKOFF_COUNT,    0)
@@ -137,9 +140,23 @@ class SpotifyMusicRepository private constructor(
     @Volatile private var lastRequestMs: Long = 0L
 
     // ── Response cache ───────────────────────────────────────────────
-    // 10-minute TTL in-memory cache (keyed by query+limit).
+    // 30-minute TTL in-memory cache (keyed by query+limit).
+    // Extended from 10 min — search results for the same mood query don't
+    // change meaningfully within a session, so no need to re-fetch.
     private val cache = mutableMapOf<String, Pair<List<Track>, Long>>()
-    private val CACHE_TTL_MS = 10 * 60 * 1000L
+    private val CACHE_TTL_MS = 30 * 60 * 1000L
+
+    // Separate cache for top-tracks — these never change within a session.
+    // Previously uncached, meaning every getPersonalizedTracks() call hit
+    // /me/top/tracks fresh, burning an API call every time.
+    private var topTracksCache: Pair<List<Track>, Long>? = null
+    private val TOP_TRACKS_TTL_MS = 60 * 60 * 1000L // 1 hour
+
+    // Timestamp of the last fresh OAuth login — used to add a small startup
+    // delay before the first API call so we don't immediately hit a server
+    // that is still cooling down from a previous session's 429.
+    @Volatile var lastAuthTimeMs: Long = 0L
+    private val POST_AUTH_DELAY_MS = 2_000L // 2 second grace after fresh login
 
     private fun cacheKey(query: String, limit: Int) = "$query|$limit"
 
@@ -182,6 +199,15 @@ class SpotifyMusicRepository private constructor(
             val waitSec = (rateLimitedUntilMs - now) / 1000
             Log.w(TAG, "Rate-limited — skipping request (${waitSec}s remaining)")
             return@withLock null
+        }
+
+        // Post-auth grace delay — if a fresh token just arrived, wait briefly before
+        // the first call so we don't fire into a server still cooling down from last session.
+        val sinceAuth = now - lastAuthTimeMs
+        if (lastAuthTimeMs > 0L && sinceAuth < POST_AUTH_DELAY_MS) {
+            val wait = POST_AUTH_DELAY_MS - sinceAuth
+            Log.d(TAG, "Post-auth grace: waiting ${wait}ms before first request")
+            delay(wait)
         }
 
         // Enforce minimum gap between requests
@@ -459,6 +485,14 @@ class SpotifyMusicRepository private constructor(
     suspend fun getUserTopTracks(limit: Int = 5, timeRange: String = "short_term"): List<Track> =
         withContext(Dispatchers.IO) {
             if (isRateLimited()) return@withContext emptyList()
+
+            // Return cached top tracks if still fresh — they don't change within a session
+            val cached = topTracksCache
+            if (cached != null && System.currentTimeMillis() < cached.second) {
+                Log.d(TAG, "Top tracks cache hit (${cached.first.size} tracks)")
+                return@withContext cached.first.take(limit)
+            }
+
             val token     = getToken() ?: return@withContext emptyList()
             val safeLimit = limit.coerceIn(1, 50)
             val url       = "$baseUrl/me/top/tracks?limit=$safeLimit&time_range=$timeRange"
@@ -471,7 +505,10 @@ class SpotifyMusicRepository private constructor(
                 return@withContext getUserTopTracks(limit, "medium_term")
             if (body == null) return@withContext emptyList()
 
-            parseTracks(JSONObject(body).optJSONArray("items") ?: return@withContext emptyList())
+            val tracks = parseTracks(JSONObject(body).optJSONArray("items") ?: return@withContext emptyList())
+            // Cache the result for 1 hour
+            topTracksCache = tracks to (System.currentTimeMillis() + TOP_TRACKS_TTL_MS)
+            tracks
         }
 
     suspend fun getUserTopTrackIds(limit: Int = 5, timeRange: String = "short_term"): List<String> =

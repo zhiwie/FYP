@@ -2,9 +2,13 @@ package com.example.fypdraft.view
 
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -17,10 +21,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,9 +49,11 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Search
@@ -309,8 +317,17 @@ fun FriendsScreen(
         AnimatedVisibility(visible = chatFriend != null, enter = slideInHorizontally(initialOffsetX = { it }), exit = slideOutHorizontally(targetOffsetX = { it })) {
             val friend = chatFriend
             if (friend != null) {
-                FriendChatPanel(friend = friend, socialRepo = socialRepo, currentTrack = currentTrack, isPlaying = isPlaying, onBack = { chatFriend = null },
-                    onPlayFriend = { friend.currentMoment?.let { m -> musicPlayerViewModel?.playFromRecommendation(m.trackTitle, m.trackArtist) { ok, _ -> if (ok) onNavigateToMusicPlayer() } } })
+                FriendChatPanel(
+                    friend               = friend,
+                    socialRepo           = socialRepo,
+                    currentTrack         = currentTrack,
+                    isPlaying            = isPlaying,
+                    themeState           = themeState,
+                    onBack               = { chatFriend = null },
+                    onPlayFriend         = { friend.currentMoment?.let { m -> musicPlayerViewModel?.playFromRecommendation(m.trackTitle, m.trackArtist) { ok, _ -> if (ok) onNavigateToMusicPlayer() } } },
+                    spotifyMusicRepo     = spotifyMusicRepo,
+                    musicPlayerViewModel = musicPlayerViewModel
+                )
             }
         }
 
@@ -739,15 +756,21 @@ private fun FriendRow(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Chat panel
+// Chat panel — rich version with voice input, song search, mood share
 // ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FriendChatPanel(
-    friend: FriendProfile, socialRepo: SocialRepository,
-    currentTrack: com.example.fypdraft.model.Track?,
-    isPlaying: Boolean, onBack: () -> Unit, onPlayFriend: () -> Unit
+    friend               : FriendProfile,
+    socialRepo           : SocialRepository,
+    currentTrack         : com.example.fypdraft.model.Track?,
+    isPlaying            : Boolean,
+    themeState           : AppThemeState = AppThemeState(),
+    onBack               : () -> Unit,
+    onPlayFriend         : () -> Unit,
+    spotifyMusicRepo     : com.example.fypdraft.data.repository.SpotifyMusicRepository? = null,
+    musicPlayerViewModel : MusicPlayerViewModel? = null
 ) {
     val scope     = rememberCoroutineScope()
     val focusMgr  = LocalFocusManager.current
@@ -756,109 +779,705 @@ private fun FriendChatPanel(
     var inputText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
+    // Attachment panel state
+    var showAttachPanel   by remember { mutableStateOf(false) }
+    var showSongSearch    by remember { mutableStateOf(false) }
+    var showMoodPicker    by remember { mutableStateOf(false) }
+    var showMoodHistory   by remember { mutableStateOf(false) }
+    var songQuery         by remember { mutableStateOf("") }
+    var songResults       by remember { mutableStateOf<List<com.example.fypdraft.model.Track>>(emptyList()) }
+    var isSongSearching   by remember { mutableStateOf(false) }
+    // Mood history — loaded lazily when the chip is tapped
+    var moodHistoryLoading by remember { mutableStateOf(false) }
+    var moodHistoryData    by remember { mutableStateOf<com.example.fypdraft.data.repository.MoodAnalytics?>(null) }
+    val moodHistoryRepo    = remember { com.example.fypdraft.data.repository.MoodHistoryRepository() }
+
+    val isDark = themeState.isDark
+    val speed  = themeState.transitionSpeed
+    val p      = themeState.activePalette
+
+    // Animated colours — all transition with the mood theme
+    val accent by androidx.compose.animation.animateColorAsState(p.accent, androidx.compose.animation.core.tween(speed), label = "acc")
+    val topBarBg by androidx.compose.animation.animateColorAsState(
+        if (isDark) p.darkTop.copy(0.97f) else p.accent.copy(0.92f), androidx.compose.animation.core.tween(speed), label = "top"
+    )
+    val bottomBarBg by androidx.compose.animation.animateColorAsState(
+        if (isDark) p.darkBottom.copy(0.97f) else p.lightBottom.copy(0.97f), androidx.compose.animation.core.tween(speed), label = "btm"
+    )
+    val inputBg by androidx.compose.animation.animateColorAsState(
+        if (isDark) Color(0xFF22223A) else Color(0xFFFFFFFF), androidx.compose.animation.core.tween(speed), label = "ibg"
+    )
+    val inputTextColor = if (isDark) Color(0xFFEEEEFF) else Color(0xFF111122)
+    val inputHint      = if (isDark) Color(0xFF8888AA) else Color(0xFF888899)
+    val inputBorder by androidx.compose.animation.animateColorAsState(
+        if (isDark) Color(0xFF4A4A6A) else Color(0xFFBBBBCC), androidx.compose.animation.core.tween(speed), label = "brd"
+    )
+    val bubbleMeBg by androidx.compose.animation.animateColorAsState(accent, androidx.compose.animation.core.tween(speed), label = "bme")
+    val bubbleFriendBg by androidx.compose.animation.animateColorAsState(
+        if (isDark) Color(0xFF2C2C44) else Color(0xFFFFFFFF), androidx.compose.animation.core.tween(speed), label = "bfr"
+    )
+    val bubbleFriendText by androidx.compose.animation.animateColorAsState(
+        if (isDark) Color(0xFFE8E8F4) else Color(0xFF111122), androidx.compose.animation.core.tween(speed), label = "bft"
+    )
+    val emptyColor by androidx.compose.animation.animateColorAsState(
+        if (isDark) Color(0xFFAAAAAA) else Color(0xFF444455), androidx.compose.animation.core.tween(speed), label = "emp"
+    )
+
+    // Voice input
+    val voiceLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        r.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { inputText = it }
+    }
+    fun launchVoice() {
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Say something to your friend…")
+        }
+        try { voiceLauncher.launch(intent) } catch (_: Exception) {}
+    }
+
+    fun sendText() {
+        val msg = inputText.trim()
+        if (msg.isNotBlank()) {
+            inputText = ""
+            focusMgr.clearFocus()
+            scope.launch { socialRepo.sendChatMessage(friend.uid, msg) }
+        }
+    }
+
+    // Real-time message listener
     androidx.compose.runtime.DisposableEffect(friend.uid) {
-        val reg = socialRepo.listenToChatMessages(friend.uid) { incoming -> messages = incoming; isLoading = false }
+        val reg = socialRepo.listenToChatMessages(friend.uid) { msgs -> messages = msgs; isLoading = false }
         onDispose { reg.remove() }
     }
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex) }
 
+    // Debounced song search
+    LaunchedEffect(songQuery) {
+        if (songQuery.length < 2) { songResults = emptyList(); return@LaunchedEffect }
+        isSongSearching = true
+        kotlinx.coroutines.delay(400)
+        songResults = spotifyMusicRepo?.searchTracks(songQuery, 6) ?: emptyList()
+        isSongSearching = false
+    }
+
+    // Mood picker dialog
+    if (showMoodPicker) {
+        val moods = listOf(
+            "happy" to "😊", "calm" to "😌", "sad" to "😢", "energetic" to "⚡",
+            "romantic" to "💕", "focused" to "🎯", "stressed" to "😣", "tired" to "😴",
+            "nervous" to "😰", "neutral" to "😐"
+        )
+        val dialogBg   = if (isDark) Color(0xFF1C1C2E) else Color.White
+        val dialogText = if (isDark) Color(0xFFE8E8F0) else Color(0xFF111122)
+        AlertDialog(
+            onDismissRequest = { showMoodPicker = false },
+            containerColor   = dialogBg,
+            shape            = RoundedCornerShape(20.dp),
+            title = { Text("Share your mood", fontWeight = FontWeight.Bold, color = dialogText) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    moods.forEach { (moodKey, emoji) ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    scope.launch { socialRepo.sendMoodMessage(friend.uid, moodKey, emoji) }
+                                    showMoodPicker  = false
+                                    showAttachPanel = false
+                                }
+                                .padding(horizontal = 12.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(emoji, fontSize = 22.sp)
+                            Spacer(Modifier.width(12.dp))
+                            Text(moodKey.replaceFirstChar { it.uppercase() }, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = dialogText)
+                        }
+                    }
+                }
+            },
+            confirmButton  = {},
+            dismissButton  = { TextButton(onClick = { showMoodPicker = false }) { Text("Cancel") } }
+        )
+    }
+
     Scaffold(
-        containerColor = Color(0xFFF5F5FA),
+        containerColor      = Color.Transparent,
+        contentWindowInsets = WindowInsets.ime,   // keyboard lifts bottom bar cleanly
         topBar = {
             TopAppBar(
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color(0xFF1A1A2E)) } },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White) }
+                },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(38.dp).clip(CircleShape).background(getMoodColor(friend.currentMoment?.mood ?: "neutral").copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(38.dp).clip(CircleShape).background(Color.White.copy(0.25f)), contentAlignment = Alignment.Center) {
                             Text(petTypeToEmoji(friend.mascotType), fontSize = 20.sp)
                         }
                         Spacer(Modifier.width(10.dp))
                         Column {
-                            Text(friend.displayName, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF1A1A2E))
-                            Text(if (friend.isOnline) "🟢 Listening now" else "Offline", fontSize = 11.sp, color = Color(0xFF666677))
+                            Text(friend.displayName, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                            Text(if (friend.isOnline) "🟢 Listening now" else "Offline", fontSize = 11.sp, color = Color.White.copy(0.75f))
                         }
                     }
                 },
-                actions = { if (friend.currentMoment != null) IconButton(onClick = onPlayFriend) { Text("▶🎵", fontSize = 16.sp) } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+                actions = {
+                    if (friend.currentMoment != null) {
+                        IconButton(onClick = onPlayFriend) { Text("▶🎵", fontSize = 16.sp) }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = topBarBg)
             )
         },
         bottomBar = {
-            Surface(color = Color.White, shadowElevation = 4.dp) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp).navigationBarsPadding(), verticalAlignment = Alignment.Bottom) {
-                    OutlinedTextField(value = inputText, onValueChange = { inputText = it }, modifier = Modifier.weight(1f),
-                        placeholder = { Text("Message ${friend.displayName.split(" ").first()}…", color = Color(0xFF666677)) },
-                        shape = RoundedCornerShape(24.dp), maxLines = 4,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = { val msg = inputText.trim(); if (msg.isNotBlank()) { inputText = ""; focusMgr.clearFocus(); scope.launch { socialRepo.sendChatMessage(friend.uid, msg) } } }),
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF1DB954), unfocusedBorderColor = Color(0xFFDDDDDD)))
-                    Spacer(Modifier.width(8.dp))
-                    if (currentTrack != null && isPlaying) {
-                        IconButton(onClick = { scope.launch { socialRepo.sendSongMessage(friend.uid, currentTrack.name, currentTrack.artist, currentTrack.albumArtUrl, currentTrack.spotifyUri) } },
-                            modifier = Modifier.size(44.dp).clip(CircleShape).background(Color(0xFF1DB954))) { Text("🎵", fontSize = 18.sp) }
-                        Spacer(Modifier.width(6.dp))
+            Column {
+                // ── Attach panel (slides up above input) ──────────────────
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showAttachPanel,
+                    enter   = androidx.compose.animation.expandVertically(androidx.compose.animation.core.tween(220)),
+                    exit    = androidx.compose.animation.shrinkVertically(androidx.compose.animation.core.tween(180))
+                ) {
+                    Surface(color = bottomBarBg, shadowElevation = 4.dp) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+
+                            // Quick-share currently playing track
+                            if (currentTrack != null && isPlaying) {
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(accent.copy(0.12f))
+                                        .clickable {
+                                            scope.launch { socialRepo.sendSongMessage(friend.uid, currentTrack.name, currentTrack.artist, currentTrack.albumArtUrl, currentTrack.spotifyUri) }
+                                            showAttachPanel = false
+                                        }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("🎵", fontSize = 18.sp)
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Share current song", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (isDark) Color.White else Color(0xFF111122))
+                                        Text("${currentTrack.name} · ${currentTrack.artist}", fontSize = 11.sp, color = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    Icon(Icons.Filled.Send, null, tint = accent, modifier = Modifier.size(18.dp))
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            }
+
+                            // Chip row — Find song + My mood + Mood Stats
+                            androidx.compose.foundation.lazy.LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                item {
+                                    AttachChip(emoji = "🔍", label = "Find song", accent = accent, isDark = isDark) {
+                                        showSongSearch  = !showSongSearch
+                                        showMoodHistory = false
+                                    }
+                                }
+                                item {
+                                    AttachChip(emoji = "😊", label = "My mood", accent = accent, isDark = isDark) {
+                                        showMoodPicker = true
+                                    }
+                                }
+                                item {
+                                    AttachChip(
+                                        emoji  = if (moodHistoryLoading) "⏳" else "📊",
+                                        label  = "Mood stats",
+                                        accent = accent,
+                                        isDark = isDark
+                                    ) {
+                                        showMoodHistory = !showMoodHistory
+                                        showSongSearch  = false
+                                        if (moodHistoryData == null && !moodHistoryLoading) {
+                                            scope.launch {
+                                                moodHistoryLoading = true
+                                                val entries = moodHistoryRepo.getMoodHistoryForDays(30)
+                                                moodHistoryData = moodHistoryRepo.computeAnalytics(entries)
+                                                moodHistoryLoading = false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Mood history preview panel
+                            androidx.compose.animation.AnimatedVisibility(visible = showMoodHistory) {
+                                Column {
+                                    Spacer(Modifier.height(10.dp))
+                                    val data = moodHistoryData
+                                    if (moodHistoryLoading) {
+                                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = accent)
+                                                Text("Loading your mood report…", fontSize = 12.sp, color = inputHint)
+                                            }
+                                        }
+                                    } else if (data == null || data.totalEntries == 0) {
+                                        Text("No mood data yet — start checking in daily!", fontSize = 13.sp, color = inputHint, modifier = Modifier.padding(8.dp))
+                                    } else {
+                                        // Mini mood analytics card
+                                        val moodEmojis = mapOf(
+                                            "happy" to "😊", "calm" to "😌", "sad" to "😢", "energetic" to "⚡",
+                                            "focused" to "🎯", "tired" to "😴", "romantic" to "💕", "stressed" to "😣",
+                                            "angry" to "😤", "anxious" to "😰", "nostalgic" to "💭", "neutral" to "🎵"
+                                        )
+                                        val domEmoji   = moodEmojis[data.dominantMood] ?: "🎵"
+                                        val trendEmoji = when (data.recentTrend) { "improving" -> "📈"; "declining" -> "📉"; else -> "➡️" }
+                                        val topMoodsStr = data.moodDistribution.entries
+                                            .sortedByDescending { it.value }.take(3)
+                                            .joinToString(",") { (m, c) ->
+                                                val pct = if (data.totalEntries > 0) (c * 100f / data.totalEntries).toInt() else 0
+                                                "$m:$pct"
+                                            }
+
+                                        Surface(
+                                            shape  = RoundedCornerShape(16.dp),
+                                            color  = if (isDark) Color(0xFF1E1E3A) else Color(0xFFF5F5FF),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(Modifier.padding(14.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(domEmoji, fontSize = 28.sp)
+                                                    Spacer(Modifier.width(10.dp))
+                                                    Column(Modifier.weight(1f)) {
+                                                        Text("30-day report", fontSize = 11.sp, color = if (isDark) Color(0xFF9999AA) else Color(0xFF666677))
+                                                        Text(
+                                                            "Mostly ${data.dominantMood.replaceFirstChar { it.uppercase() }} $trendEmoji",
+                                                            fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                                                            color = if (isDark) Color.White else Color(0xFF111122)
+                                                        )
+                                                    }
+                                                    Text("${data.totalEntries} entries", fontSize = 11.sp, color = accent, fontWeight = FontWeight.SemiBold)
+                                                }
+                                                Spacer(Modifier.height(8.dp))
+                                                // Top 3 mood bars
+                                                data.moodDistribution.entries.sortedByDescending { it.value }.take(3).forEach { (mood, count) ->
+                                                    val pct = if (data.totalEntries > 0) count.toFloat() / data.totalEntries else 0f
+                                                    val emoji = moodEmojis[mood] ?: "🎵"
+                                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                                        Text("$emoji ${mood.replaceFirstChar { it.uppercase() }}", fontSize = 12.sp, modifier = Modifier.width(90.dp), color = if (isDark) Color(0xFFDDDDEE) else Color(0xFF333344))
+                                                        Box(Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(if (isDark) Color.White.copy(0.08f) else Color.Black.copy(0.06f))) {
+                                                            Box(Modifier.height(6.dp).fillMaxWidth(pct).clip(RoundedCornerShape(3.dp)).background(accent))
+                                                        }
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Text("${(pct * 100).toInt()}%", fontSize = 11.sp, color = if (isDark) Color(0xFF9999AA) else Color(0xFF666677))
+                                                    }
+                                                }
+                                                if (data.streaks.currentStreak > 0) {
+                                                    Spacer(Modifier.height(6.dp))
+                                                    Text("🔥 ${data.streaks.currentStreak}-day check-in streak", fontSize = 12.sp, color = Color(0xFFFF6B35), fontWeight = FontWeight.SemiBold)
+                                                }
+                                                Spacer(Modifier.height(10.dp))
+                                                Button(
+                                                    onClick = {
+                                                        scope.launch {
+                                                            socialRepo.sendMoodHistoryMessage(
+                                                                friend.uid,
+                                                                data.dominantMood, domEmoji,
+                                                                data.recentTrend, topMoodsStr,
+                                                                data.streaks.currentStreak,
+                                                                data.totalEntries, "30 days"
+                                                            )
+                                                        }
+                                                        showMoodHistory = false
+                                                        showAttachPanel = false
+                                                    },
+                                                    colors  = ButtonDefaults.buttonColors(containerColor = accent),
+                                                    shape   = RoundedCornerShape(12.dp),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Icon(Icons.Filled.Send, null, modifier = Modifier.size(14.dp))
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Text("Share this report", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Song search field + results
+                            androidx.compose.animation.AnimatedVisibility(visible = showSongSearch) {
+                                Column {
+                                    Spacer(Modifier.height(10.dp))
+                                    OutlinedTextField(
+                                        value         = songQuery,
+                                        onValueChange = { songQuery = it },
+                                        placeholder   = { Text("Search any song…", color = inputHint) },
+                                        singleLine    = true,
+                                        shape         = RoundedCornerShape(12.dp),
+                                        modifier      = Modifier.fillMaxWidth(),
+                                        leadingIcon   = { Icon(Icons.Filled.Search, null, tint = inputHint) },
+                                        trailingIcon  = {
+                                            if (isSongSearching)
+                                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = accent)
+                                            else if (songQuery.isNotBlank())
+                                                IconButton(onClick = { songQuery = ""; songResults = emptyList() }) {
+                                                    Icon(Icons.Filled.Close, null, tint = inputHint, modifier = Modifier.size(18.dp))
+                                                }
+                                        },
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = accent, unfocusedBorderColor = inputBorder,
+                                            focusedTextColor = inputTextColor, unfocusedTextColor = inputTextColor,
+                                            focusedContainerColor = inputBg, unfocusedContainerColor = inputBg,
+                                            focusedPlaceholderColor = inputHint, unfocusedPlaceholderColor = inputHint
+                                        )
+                                    )
+                                    if (songResults.isNotEmpty()) {
+                                        Spacer(Modifier.height(6.dp))
+                                        songResults.take(5).forEach { track ->
+                                            Row(
+                                                Modifier.fillMaxWidth()
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .clickable {
+                                                        scope.launch { socialRepo.sendSongMessage(friend.uid, track.name, track.artist, track.albumArtUrl, track.spotifyUri) }
+                                                        songQuery = ""; songResults = emptyList()
+                                                        showSongSearch = false; showAttachPanel = false
+                                                    }
+                                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Box(Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)).background(accent.copy(0.15f)), contentAlignment = Alignment.Center) {
+                                                    if (track.albumArtUrl.isNotEmpty())
+                                                        AsyncImage(model = track.albumArtUrl, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)))
+                                                    else Text("🎵", fontSize = 16.sp)
+                                                }
+                                                Spacer(Modifier.width(10.dp))
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(track.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = if (isDark) Color.White else Color(0xFF111122), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Text(track.artist, fontSize = 11.sp, color = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677), maxLines = 1)
+                                                }
+                                                Icon(Icons.Filled.Send, null, tint = accent.copy(0.7f), modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    IconButton(onClick = { val msg = inputText.trim(); if (msg.isNotBlank()) { inputText = ""; focusMgr.clearFocus(); scope.launch { socialRepo.sendChatMessage(friend.uid, msg) } } },
-                        enabled = inputText.isNotBlank(), modifier = Modifier.size(44.dp).clip(CircleShape).background(if (inputText.isNotBlank()) Color(0xFF1A1A2E) else Color(0xFFEEEEEE))) {
-                        Icon(Icons.AutoMirrored.Filled.Send, null, tint = if (inputText.isNotBlank()) Color.White else Color(0xFF666677))
+                }
+
+                // ── Main input bar ─────────────────────────────────────────
+                Box(Modifier.fillMaxWidth().background(bottomBarBg).navigationBarsPadding()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        // Attachment toggle (+/×)
+                        IconButton(
+                            onClick  = { showAttachPanel = !showAttachPanel },
+                            modifier = Modifier.size(44.dp).clip(CircleShape)
+                                .background(if (showAttachPanel) accent.copy(0.25f) else inputBorder.copy(0.3f))
+                        ) {
+                            Icon(
+                                if (showAttachPanel) Icons.Filled.Close else Icons.Filled.Add,
+                                null, tint = if (showAttachPanel) accent else inputHint
+                            )
+                        }
+                        Spacer(Modifier.width(6.dp))
+
+                        // Text input
+                        OutlinedTextField(
+                            value         = inputText,
+                            onValueChange = { inputText = it },
+                            modifier      = Modifier.weight(1f),
+                            placeholder   = { Text("Message ${friend.displayName.split(" ").first()}…", color = inputHint) },
+                            shape         = RoundedCornerShape(24.dp),
+                            maxLines      = 4,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = { sendText() }),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor        = accent,
+                                unfocusedBorderColor      = inputBorder,
+                                focusedTextColor          = inputTextColor,
+                                unfocusedTextColor        = inputTextColor,
+                                cursorColor               = accent,
+                                focusedContainerColor     = inputBg,
+                                unfocusedContainerColor   = inputBg,
+                                focusedPlaceholderColor   = inputHint,
+                                unfocusedPlaceholderColor = inputHint
+                            )
+                        )
+                        Spacer(Modifier.width(6.dp))
+
+                        // Mic (empty) / Send (has text)
+                        if (inputText.isBlank()) {
+                            IconButton(
+                                onClick  = { launchVoice() },
+                                modifier = Modifier.size(44.dp).clip(CircleShape).background(inputBorder.copy(0.3f))
+                            ) {
+                                Icon(Icons.Filled.Mic, "Voice input", tint = inputHint)
+                            }
+                        } else {
+                            IconButton(
+                                onClick  = { sendText() },
+                                modifier = Modifier.size(44.dp).clip(CircleShape).background(accent)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Send, null, tint = Color.White)
+                            }
+                        }
                     }
                 }
             }
         }
     ) { padding ->
-        when {
-            isLoading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color(0xFF1DB954)) }
-            messages.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(petTypeToEmoji(friend.mascotType), fontSize = 52.sp); Spacer(Modifier.height(12.dp))
-                    Text("Say hi to ${friend.displayName.split(" ").first()}!", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = Color(0xFF666677)); Spacer(Modifier.height(6.dp))
-                    Text("Share what you're listening to 🎵", fontSize = 13.sp, color = Color(0xFFAAAAAA))
+        Box(Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)) {
+            when {
+                isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = accent)
                 }
-            }
-            else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(messages, key = { it.id }) { msg -> if (msg.messageType == "song") SongMessageBubble(msg) else ChatMessageBubble(msg) }
+                messages.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(petTypeToEmoji(friend.mascotType), fontSize = 52.sp)
+                        Spacer(Modifier.height(12.dp))
+                        Text("Say hi to ${friend.displayName.split(" ").first()}!", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = emptyColor)
+                        Spacer(Modifier.height(6.dp))
+                        Text("Share songs, moods, or just chat 🎵", fontSize = 13.sp, color = emptyColor.copy(0.7f))
+                    }
+                }
+                else -> LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(messages, key = { it.id }) { msg ->
+                        when (msg.messageType) {
+                            "song"         -> FriendSongBubble(msg, isDark, accent, musicPlayerViewModel)
+                            "mood"         -> FriendMoodBubble(msg, isDark, bubbleMeBg, bubbleFriendBg, bubbleFriendText)
+                            "mood_history" -> FriendMoodHistoryBubble(msg, isDark, accent, bubbleMeBg, bubbleFriendBg, bubbleFriendText)
+                            else           -> FriendTextBubble(msg, bubbleMeBg, bubbleFriendBg, bubbleFriendText)
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+// ── Attach chip ───────────────────────────────────────────────────────────────
+
 @Composable
-private fun ChatMessageBubble(msg: FriendChatMessage) {
+private fun AttachChip(emoji: String, label: String, accent: Color, isDark: Boolean, onClick: () -> Unit) {
+    Surface(
+        shape    = RoundedCornerShape(20.dp),
+        color    = if (isDark) Color.White.copy(0.10f) else Color.Black.copy(0.06f),
+        modifier = Modifier.clickable { onClick() }
+    ) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(emoji, fontSize = 15.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = if (isDark) Color(0xFFDDDDEE) else Color(0xFF333344))
+        }
+    }
+}
+
+// ── Message bubbles ───────────────────────────────────────────────────────────
+
+@Composable
+private fun FriendTextBubble(
+    msg: FriendChatMessage,
+    bubbleMeBg: Color,
+    bubbleFriendBg: Color,
+    bubbleFriendText: Color
+) {
     val isMe = msg.isFromMe
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start) {
         Column(Modifier.widthIn(max = 280.dp), horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
-            Box(Modifier.clip(RoundedCornerShape(topStart = if (isMe) 18.dp else 4.dp, topEnd = if (isMe) 4.dp else 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp))
-                .background(if (isMe) Color(0xFF1DB954) else Color.White).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(msg.text, color = if (isMe) Color.White else Color(0xFF1A1A2E), fontSize = 14.sp, lineHeight = 20.sp)
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(topStart = if (isMe) 18.dp else 4.dp, topEnd = if (isMe) 4.dp else 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp))
+                    .background(if (isMe) bubbleMeBg else bubbleFriendBg)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(msg.text, color = if (isMe) Color.White else bubbleFriendText, fontSize = 14.sp, lineHeight = 20.sp)
             }
-            Text(formatTimeAgo(msg.timestamp), fontSize = 10.sp, color = Color(0xFFAAAAAA), modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+            FriendTimestamp(msg.timestamp)
         }
     }
 }
 
 @Composable
-private fun SongMessageBubble(msg: FriendChatMessage) {
-    val isMe = msg.isFromMe
+private fun FriendSongBubble(
+    msg: FriendChatMessage,
+    isDark: Boolean,
+    accent: Color,
+    musicPlayerViewModel: MusicPlayerViewModel? = null
+) {
+    val isMe      = msg.isFromMe
+    val bg        = if (isMe) accent.copy(0.15f) else if (isDark) Color(0xFF2C2C3E) else Color.White
+    val titleCol  = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val subCol    = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666677)
+    var loading   by remember { mutableStateOf(false) }
+
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start) {
         Column(Modifier.widthIn(max = 300.dp), horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
-            Surface(shape = RoundedCornerShape(topStart = if (isMe) 18.dp else 4.dp, topEnd = if (isMe) 4.dp else 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
-                color = if (isMe) Color(0xFF1DB954).copy(alpha = 0.15f) else Color.White, shadowElevation = 2.dp) {
+            Surface(
+                shape = RoundedCornerShape(topStart = if (isMe) 18.dp else 4.dp, topEnd = if (isMe) 4.dp else 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
+                color = bg, shadowElevation = 2.dp
+            ) {
                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF1DB954).copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
-                        if (!msg.songAlbumArt.isNullOrEmpty()) AsyncImage(model = msg.songAlbumArt, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    Box(Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)).background(accent.copy(0.2f)), contentAlignment = Alignment.Center) {
+                        if (!msg.songAlbumArt.isNullOrEmpty())
+                            AsyncImage(model = msg.songAlbumArt, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                         else Text("🎵", fontSize = 22.sp)
                     }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(msg.songTitle ?: "Unknown Track", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1A1A2E), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(msg.songArtist ?: "", fontSize = 11.sp, color = Color(0xFF666677), maxLines = 1); Spacer(Modifier.height(4.dp))
-                        Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFF1DB954)) { Text("▶ Play", Modifier.padding(horizontal = 8.dp, vertical = 2.dp), fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold) }
+                        Text(msg.songTitle ?: "Unknown", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = titleCol, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(msg.songArtist ?: "", fontSize = 11.sp, color = subCol, maxLines = 1)
+                        Spacer(Modifier.height(6.dp))
+                        Surface(
+                            shape    = RoundedCornerShape(8.dp),
+                            color    = accent,
+                            modifier = Modifier.clickable(enabled = !loading) {
+                                if (musicPlayerViewModel != null && msg.songTitle != null) {
+                                    loading = true
+                                    musicPlayerViewModel.playFromRecommendation(msg.songTitle, msg.songArtist ?: "") { _, _ -> loading = false }
+                                }
+                            }
+                        ) {
+                            Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (loading) CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp, color = Color.White)
+                                else Text("▶", fontSize = 10.sp, color = Color.White)
+                                Spacer(Modifier.width(4.dp))
+                                Text(if (loading) "Loading…" else "Play", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }
-            Text(formatTimeAgo(msg.timestamp), fontSize = 10.sp, color = Color(0xFFAAAAAA), modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+            FriendTimestamp(msg.timestamp)
         }
+    }
+}
+
+@Composable
+private fun FriendMoodBubble(
+    msg: FriendChatMessage,
+    isDark: Boolean,
+    bubbleMeBg: Color,
+    bubbleFriendBg: Color,
+    bubbleFriendText: Color
+) {
+    val isMe     = msg.isFromMe
+    val emoji    = msg.moodEmoji ?: "😊"
+    val moodName = (msg.mood ?: "neutral").replaceFirstChar { it.uppercase() }
+    val note     = msg.moodNote?.takeIf { it.isNotBlank() }
+    val bg       = if (isMe) bubbleMeBg.copy(0.85f) else bubbleFriendBg
+
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start) {
+        Column(Modifier.widthIn(max = 240.dp), horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
+            Surface(
+                shape = RoundedCornerShape(topStart = if (isMe) 18.dp else 4.dp, topEnd = if (isMe) 4.dp else 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
+                color = bg, shadowElevation = 2.dp
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(emoji, fontSize = 28.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("Feeling $moodName", fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                color = if (isMe) Color.White else bubbleFriendText)
+                            if (note != null)
+                                Text(note, fontSize = 12.sp, color = if (isMe) Color.White.copy(0.8f) else bubbleFriendText.copy(0.7f))
+                        }
+                    }
+                }
+            }
+            FriendTimestamp(msg.timestamp)
+        }
+    }
+}
+
+@Composable
+private fun FriendMoodHistoryBubble(
+    msg: FriendChatMessage,
+    isDark: Boolean,
+    accent: Color,
+    bubbleMeBg: Color,
+    bubbleFriendBg: Color,
+    bubbleFriendText: Color
+) {
+    val isMe        = msg.isFromMe
+    val domMood     = msg.mhDominantMood ?: "neutral"
+    val domEmoji    = msg.mhDominantEmoji ?: "🎵"
+    val trend       = msg.mhTrend ?: "stable"
+    val rangeLabel  = msg.mhRangeLabel ?: "30 days"
+    val totalEntries = msg.mhTotalEntries ?: 0
+    val streak      = msg.mhStreak ?: 0
+    val trendEmoji  = when (trend) { "improving" -> "📈"; "declining" -> "📉"; else -> "➡️" }
+
+    // Parse "happy:45,calm:30,sad:25"
+    val topMoods: List<Pair<String, Int>> = msg.mhTopMoods
+        ?.split(",")?.mapNotNull { entry ->
+            val parts = entry.split(":")
+            if (parts.size == 2) parts[0].trim() to (parts[1].trim().toIntOrNull() ?: 0) else null
+        } ?: emptyList()
+
+    val moodEmojis = mapOf(
+        "happy" to "😊", "calm" to "😌", "sad" to "😢", "energetic" to "⚡",
+        "focused" to "🎯", "tired" to "😴", "romantic" to "💕", "stressed" to "😣",
+        "angry" to "😤", "anxious" to "😰", "nostalgic" to "💭", "neutral" to "🎵"
+    )
+
+    val cardBg    = if (isMe) bubbleMeBg.copy(0.12f) else if (isDark) Color(0xFF1E1E3A) else Color(0xFFF0F0FA)
+    val textColor = if (isDark) Color(0xFFE8E8F0) else Color(0xFF111122)
+    val subColor  = if (isDark) Color(0xFF9999AA) else Color(0xFF666677)
+
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start) {
+        Column(Modifier.widthIn(max = 300.dp), horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
+            Surface(
+                shape = RoundedCornerShape(topStart = if (isMe) 18.dp else 4.dp, topEnd = if (isMe) 4.dp else 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
+                color = cardBg,
+                shadowElevation = 2.dp
+            ) {
+                Column(Modifier.padding(14.dp).widthIn(min = 220.dp)) {
+                    // Header
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("📊", fontSize = 18.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Mood report · $rangeLabel", fontSize = 11.sp, color = subColor)
+                            Text(
+                                "$domEmoji Mostly ${domMood.replaceFirstChar { it.uppercase() }} $trendEmoji",
+                                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor
+                            )
+                        }
+                        if (totalEntries > 0) {
+                            Text("$totalEntries check-ins", fontSize = 10.sp, color = accent, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    if (topMoods.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        topMoods.forEach { (mood, pct) ->
+                            val emoji = moodEmojis[mood] ?: "🎵"
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                Text("$emoji ${mood.replaceFirstChar { it.uppercase() }}", fontSize = 11.sp, modifier = Modifier.width(88.dp), color = textColor)
+                                Box(Modifier.weight(1f).height(5.dp).clip(RoundedCornerShape(3.dp)).background(if (isDark) Color.White.copy(0.10f) else Color.Black.copy(0.07f))) {
+                                    Box(Modifier.height(5.dp).fillMaxWidth(pct / 100f).clip(RoundedCornerShape(3.dp)).background(accent.copy(if (isMe) 0.85f else 0.75f)))
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Text("$pct%", fontSize = 10.sp, color = subColor)
+                            }
+                        }
+                    }
+
+                    if (streak > 0) {
+                        Spacer(Modifier.height(6.dp))
+                        Text("🔥 $streak-day streak", fontSize = 11.sp, color = Color(0xFFFF6B35), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            FriendTimestamp(msg.timestamp)
+        }
+    }
+}
+
+@Composable
+private fun FriendTimestamp(timestamp: Long) {
+    Surface(shape = RoundedCornerShape(6.dp), color = Color.Black.copy(0.18f), modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
+        Text(formatTimeAgo(timestamp), fontSize = 10.sp, color = Color.White.copy(0.85f), modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
     }
 }
 

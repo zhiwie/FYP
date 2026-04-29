@@ -158,8 +158,11 @@ fun EmotionChatScreen(
     val bottomBarBg = chatPalette.darkBottom.copy(alpha = 0.97f).compositeOver(Color(0xFF080808))
 
     Scaffold(
-        snackbarHost   = { SnackbarHost(snackbarHost) },
-        containerColor = Color.Transparent,
+        snackbarHost      = { SnackbarHost(snackbarHost) },
+        containerColor    = Color.Transparent,
+        // KEY FIX: tell Scaffold to consume IME insets so the bottom bar
+        // rides up with the keyboard automatically, no manual imePadding needed.
+        contentWindowInsets = WindowInsets.ime,
         topBar = {
             Box(
                 modifier = Modifier
@@ -228,7 +231,6 @@ fun EmotionChatScreen(
                 .fillMaxSize()
                 .background(Brush.verticalGradient(chatBgColors))
                 .padding(padding)
-                .imePadding()
         ) {
             if (messages.isEmpty() && typingState == TypingState.Idle) {
                 EmptyChatPlaceholder(petState = petState, themeState = themeState, onSuggestionClick = { sendMessage(it) })

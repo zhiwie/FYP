@@ -45,7 +45,7 @@ class SpotifyRepository private constructor(private val context: Context) {
 
         private const val TOKEN_LIFETIME_MS = 3000_000L // 50 minutes
 
-        const val CLIENT_ID = "f5bf4e9ecc5e4f32a622aeb60aca64ea"
+        const val CLIENT_ID = "667c083092c747f1bef171ed8aacb46e"
         const val REDIRECT_URI = "fypdraft://callback"
 
         @Volatile
@@ -71,18 +71,12 @@ class SpotifyRepository private constructor(private val context: Context) {
      * that includes all required scopes (playlist-read-private etc.).
      */
     private fun clearIfScopeVersionMismatch() {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs        = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val storedVersion = prefs.getInt(KEY_SCOPE_VERSION, 0)
         if (storedVersion != CURRENT_SCOPE_VERSION) {
-            Log.w(TAG, "Scope version mismatch ...")
+            Log.w(TAG, "Scope version mismatch (stored=$storedVersion, current=$CURRENT_SCOPE_VERSION). Clearing token.")
             prefs.edit().clear().apply()
             prefs.edit().putInt(KEY_SCOPE_VERSION, CURRENT_SCOPE_VERSION).apply()
-            // ++ Clear music repo rate-limit too
-            context.getSharedPreferences("spotify_music_repo_prefs", Context.MODE_PRIVATE).edit()
-                .putLong("rate_limited_until_ms", 0L)
-                .putInt("rate_limit_backoff_count", 0)
-                .apply()
-            SpotifyMusicRepository.clearInstance()
             tokenTimestamp = 0L
             _authState.value = SpotifyAuthState(isAuthenticated = false)
         }
@@ -99,6 +93,11 @@ class SpotifyRepository private constructor(private val context: Context) {
             isLoading       = false
         )
         Log.d(TAG, "Spotify auth successful — token length: ${accessToken.length}")
+        // FIX: A fresh OAuth token means the user has re-authenticated.
+        // Clear any persisted rate-limit block so the new session starts clean.
+        // The 429 penalty belonged to the old session — not this one.
+        SpotifyMusicRepository.getInstance(this, context).clearRateLimit()
+        Log.d(TAG, "Rate limit cleared on fresh auth token")
     }
 
     fun handleAuthError(error: String) {
@@ -182,15 +181,10 @@ class SpotifyRepository private constructor(private val context: Context) {
 
     fun signOut() {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
-        // Also clear the music repo rate-limit so a new account isn't blocked by the old one's penalty
-        context.getSharedPreferences("spotify_music_repo_prefs", Context.MODE_PRIVATE).edit()
-            .putLong("rate_limited_until_ms", 0L)
-            .putInt("rate_limit_backoff_count", 0)
-            .apply()
-        SpotifyMusicRepository.clearInstance() // force new instance for new account
         tokenTimestamp   = 0L
         _authState.value = SpotifyAuthState(isAuthenticated = false)
     }
+
     fun restoreAuthState() {
         val token = getAccessToken()
         if (token != null) {

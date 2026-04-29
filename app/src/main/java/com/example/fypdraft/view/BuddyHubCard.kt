@@ -11,6 +11,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -106,7 +108,6 @@ fun BuddyHubCard(
 
     var mode           by remember { mutableStateOf(HubMode.VISUALISER) }
     var showCustomize  by remember { mutableStateOf(false) }
-    var streakExpanded by remember { mutableStateOf(false) }
     var showMoodList   by remember { mutableStateOf(false) }
 
     val eqColors = remember(mood.mood) { hubEqualizerColors(mood.mood) }
@@ -189,32 +190,32 @@ fun BuddyHubCard(
 
                 HorizontalDivider(color = divColor, thickness = 0.8.dp, modifier = Modifier.padding(top = 12.dp))
 
-                // ── 6. STREAK SUMMARY ROW ─────────────────────────────────
-                // Tapping the mood label opens a list to pick a new mood → refreshes recs & bg
-                StreakSummaryRow(
+                // ── 6. STREAK HEADER — fire count badge always visible ─────
+                StreakHeaderRow(
                     checkInState  = checkInState,
                     primaryText   = primaryText,
                     secondaryText = secondaryText,
-                    accent        = accent,
-                    expanded      = streakExpanded,
-                    onToggle      = { streakExpanded = !streakExpanded },
-                    onMoodLabelTap = { showMoodList = true }
+                    accent        = accent
                 )
 
-                // ── 7. EXPANDABLE: weekly fire tracker only (no emotion chips) ──
-                AnimatedVisibility(
-                    visible = streakExpanded,
-                    enter   = expandVertically(tween(260)),
-                    exit    = shrinkVertically(tween(220))
-                ) {
-                    Column(Modifier.fillMaxWidth()) {
-                        Spacer(Modifier.height(8.dp))
-                        WeeklyFireTracker(checkInState.checkedInDates, accent, isDark)
-                        Spacer(Modifier.height(14.dp))
-                    }
-                }
+                // ── 7. WEEKLY FIRE TRACKER — always visible ────────────────
+                WeeklyFireTracker(checkInState.checkedInDates, accent, isDark)
 
-                if (!streakExpanded) Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(12.dp))
+
+                // ── 8. INLINE EMOTION PICKER BAR ──────────────────────────
+                EmotionPickerBar(
+                    currentMood    = checkInState.todayMood,
+                    accent         = accent,
+                    isDark         = isDark,
+                    primaryText    = primaryText,
+                    onSelect       = { key ->
+                        onCheckInRaw(key)
+                        onMoodPick(key)
+                    }
+                )
+
+                Spacer(Modifier.height(14.dp))
             }
         }
     }
@@ -629,99 +630,60 @@ private fun ChatButton(petState: PetState, chatMessage: String?, primaryText: Co
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  STREAK SUMMARY ROW
+//  STREAK HEADER ROW — compact fire badge + total count, no expand button
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun StreakSummaryRow(
-    checkInState   : CheckInState,
-    primaryText    : Color,
-    secondaryText  : Color,
-    accent         : Color,
-    expanded       : Boolean,
-    onToggle       : () -> Unit,
-    onMoodLabelTap : () -> Unit = {}   // tapping the mood chip opens the mood list
+private fun StreakHeaderRow(
+    checkInState  : CheckInState,
+    primaryText   : Color,
+    secondaryText : Color,
+    accent        : Color
 ) {
-    val fireColor      = Color(0xFFFF6B35)
-    val (label, emoji) = DailyMood.displayFor(checkInState.todayMood)
-
+    val fireColor = Color(0xFFFF6B35)
     Row(
-        Modifier.fillMaxWidth().clickable { onToggle() }.padding(horizontal = 18.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Left side: mood chip (tappable to pick a different mood) or plain label
-        if (checkInState.checkedInToday && label.isNotEmpty()) {
-            // Tappable mood pill — shows current mood + edit hint
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(accent.copy(alpha = 0.14f))
-                    .clickable { onMoodLabelTap() }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("$emoji $label", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = primaryText)
-                    Spacer(Modifier.width(4.dp))
-                    // small pencil icon signals it's tappable
-                    Icon(Icons.Filled.Edit, "Change mood", tint = primaryText.copy(0.45f), modifier = Modifier.size(11.dp))
-                }
-            }
-        } else {
-            // Not checked in yet — simple label; tapping opens mood list to do the check-in
-            Text(
-                text     = "How are you feeling?",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color    = primaryText,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .clickable { onMoodLabelTap() }
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-            )
+        Column {
+            Text("This Week", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = secondaryText)
+            Text("Check-in Streak", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = primaryText)
         }
-
-        // Right side: streak badge + expand chevron
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // Streak badge: 🔥 if streak > 0, ✅ if checked in today with no streak
-            when {
-                checkInState.streak > 0 -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clip(RoundedCornerShape(20.dp))
-                            .background(fireColor.copy(0.14f)).padding(horizontal = 10.dp, vertical = 5.dp)
-                    ) {
-                        Text("🔥", fontSize = 13.sp)
-                        Spacer(Modifier.width(3.dp))
-                        Text("${checkInState.streak}d streak", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = fireColor)
-                    }
-                }
-                checkInState.checkedInToday -> {
-                    Box(
-                        Modifier.size(28.dp).clip(CircleShape).background(accent.copy(0.18f)),
-                        contentAlignment = Alignment.Center
-                    ) { Text("✅", fontSize = 14.sp) }
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            Icon(
-                imageVector        = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse" else "Expand",
-                tint               = primaryText.copy(0.55f),
-                modifier           = Modifier.size(20.dp)
+        // Fire badge — shows streak count prominently
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(
+                    if (checkInState.streak > 0) fireColor.copy(0.16f)
+                    else accent.copy(0.10f)
+                )
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            Text(if (checkInState.streak > 0) "🔥" else "💤", fontSize = 15.sp)
+            Spacer(Modifier.width(5.dp))
+            Text(
+                if (checkInState.streak > 0) "${checkInState.streak} day streak"
+                else "No streak yet",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (checkInState.streak > 0) fireColor else secondaryText
             )
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  WEEKLY FIRE TRACKER
+//  WEEKLY FIRE TRACKER — always visible, prominent fire icons per checked day
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun WeeklyFireTracker(checkedInDates: Set<String>, accent: Color, isDark: Boolean) {
     val todayStr  = hubTodayStr()
+    val fireColor = Color(0xFFFF6B35)
     val dayLabels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
     val weekDates: List<String> = remember {
         val c   = Calendar.getInstance()
         val dow = c.get(Calendar.DAY_OF_WEEK)
@@ -734,35 +696,209 @@ private fun WeeklyFireTracker(checkedInDates: Set<String>, accent: Color, isDark
         }
     }
 
-    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly
+    ) {
         weekDates.forEachIndexed { i, dateStr ->
             val isToday   = dateStr == todayStr
             val isChecked = checkedInDates.contains(dateStr)
             val isFuture  = dateStr > todayStr
 
-            val dotBg by animateColorAsState(
+            // Animated background per cell
+            val cellBg by animateColorAsState(
                 when {
-                    isChecked -> accent.copy(alpha = 0.22f)
-                    isToday   -> accent.copy(alpha = 0.12f)
-                    else      -> Color.Transparent
+                    isChecked && isToday -> fireColor.copy(alpha = 0.28f)
+                    isChecked            -> fireColor.copy(alpha = 0.18f)
+                    isToday              -> accent.copy(alpha = 0.14f)
+                    else                 -> Color.Transparent
                 },
-                tween(280), label = "wdot$i"
+                tween(300), label = "wfire$i"
+            )
+            val borderColor by animateColorAsState(
+                when {
+                    isToday && isChecked -> fireColor.copy(0.70f)
+                    isToday              -> accent.copy(0.55f)
+                    isChecked            -> fireColor.copy(0.35f)
+                    else                 -> Color.Transparent
+                },
+                tween(300), label = "wborder$i"
+            )
+            // Fire icon scale — checked days pop
+            val fireScale by animateFloatAsState(
+                if (isChecked) 1f else 0f,
+                spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium),
+                label = "wscale$i"
             )
 
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(38.dp)) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f)
+            ) {
+                // Day label
                 Text(
                     dayLabels[i],
                     fontSize  = 9.sp,
-                    color     = (if (isDark) Color(0xFF888899) else Color(0xFF999AAA)).copy(alpha = if (isFuture) 0.35f else 1f),
+                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                    color = when {
+                        isToday   -> if (isDark) Color(0xFFEEEEFF) else Color(0xFF222233)
+                        isFuture  -> (if (isDark) Color(0xFF666677) else Color(0xFFAAAAAA))
+                        else      -> if (isDark) Color(0xFF9999AA) else Color(0xFF777788)
+                    },
                     textAlign = TextAlign.Center
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(5.dp))
+                // Fire cell
                 Box(
-                    Modifier.size(30.dp).clip(CircleShape).background(dotBg)
-                        .then(if (isToday && !isChecked) Modifier.border(1.5.dp, accent.copy(0.60f), CircleShape) else Modifier),
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(cellBg)
+                        .then(
+                            if (borderColor != Color.Transparent)
+                                Modifier.border(1.5.dp, borderColor, CircleShape)
+                            else Modifier
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isChecked) Text("🔥", fontSize = 14.sp, textAlign = TextAlign.Center)
+                    if (isChecked) {
+                        // Checked: big fire emoji, scaled in with spring
+                        Text(
+                            "🔥",
+                            fontSize = 18.sp,
+                            modifier = Modifier.graphicsLayer {
+                                scaleX = fireScale
+                                scaleY = fireScale
+                            }
+                        )
+                    } else if (isToday) {
+                        // Today but not checked: pulsing dot
+                        val inf = rememberInfiniteTransition(label = "todayPulse$i")
+                        val pulse by inf.animateFloat(
+                            0.5f, 1f,
+                            infiniteRepeatable(tween(900, easing = EaseInOutSine), RepeatMode.Reverse),
+                            label = "pulse$i"
+                        )
+                        Text("·", fontSize = 20.sp, color = accent.copy(alpha = pulse), fontWeight = FontWeight.Bold)
+                    } else if (!isFuture) {
+                        // Past unchecked: faint empty circle indicator
+                        Box(
+                            Modifier.size(8.dp).clip(CircleShape)
+                                .background(
+                                    if (isDark) Color.White.copy(0.12f)
+                                    else Color.Black.copy(0.10f)
+                                )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  INLINE EMOTION PICKER BAR
+//  Horizontal scroll of emotion chips — tapping one checks in immediately.
+//  Includes moods beyond DailyMood enum (romantic, nervous, energetic, focused)
+//  sent as raw keys via onCheckInRaw → onMoodPick.
+// ─────────────────────────────────────────────────────────────────────────────
+
+private data class EmotionChip(val key: String, val emoji: String, val label: String)
+
+private val EMOTION_CHIPS = listOf(
+    EmotionChip("happy",     "😊", "Happy"),
+    EmotionChip("calm",      "😌", "Calm"),
+    EmotionChip("sad",       "😢", "Sad"),
+    EmotionChip("romantic",  "💕", "Romantic"),
+    EmotionChip("energetic", "⚡", "Energetic"),
+    EmotionChip("focused",   "🎯", "Focused"),
+    EmotionChip("stressed",  "😣", "Stressed"),
+    EmotionChip("nervous",   "😰", "Nervous"),
+    EmotionChip("tired",     "😴", "Tired"),
+    EmotionChip("neutral",   "😐", "Neutral"),
+)
+
+@Composable
+private fun EmotionPickerBar(
+    currentMood : String?,
+    accent      : Color,
+    isDark      : Boolean,
+    primaryText : Color,
+    onSelect    : (String) -> Unit
+) {
+    val labelColor   = if (isDark) Color(0xFF9999AA) else Color(0xFF666677)
+    val unselBg      = if (isDark) Color.White.copy(0.08f) else Color.Black.copy(0.06f)
+    val unselText    = if (isDark) Color(0xFFCCCCDD) else Color(0xFF333344)
+
+    Column(Modifier.fillMaxWidth()) {
+        // Section label
+        Row(
+            Modifier.padding(start = 18.dp, end = 18.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("How are you feeling?", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = labelColor)
+        }
+
+        // Scrollable chip row
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(EMOTION_CHIPS) { chip ->
+                val isSelected = currentMood == chip.key ||
+                        (currentMood?.startsWith(chip.key) == true)
+
+                val chipBg by animateColorAsState(
+                    if (isSelected) accent.copy(alpha = 0.22f) else unselBg,
+                    tween(180), label = "chip_${chip.key}"
+                )
+                val chipBorder by animateColorAsState(
+                    if (isSelected) accent else Color.Transparent,
+                    tween(180), label = "chipbrd_${chip.key}"
+                )
+                val chipTextColor by animateColorAsState(
+                    if (isSelected) accent else unselText,
+                    tween(180), label = "chiptxt_${chip.key}"
+                )
+                // Spring scale pop on selection
+                val chipScale by animateFloatAsState(
+                    if (isSelected) 1.05f else 1f,
+                    spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium),
+                    label = "chipsc_${chip.key}"
+                )
+
+                Box(
+                    modifier = Modifier
+                        .graphicsLayer { scaleX = chipScale; scaleY = chipScale }
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(chipBg)
+                        .then(
+                            if (isSelected) Modifier.border(1.5.dp, chipBorder, RoundedCornerShape(20.dp))
+                            else Modifier
+                        )
+                        .clickable { onSelect(chip.key) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Text(chip.emoji, fontSize = 15.sp)
+                        Text(
+                            chip.label,
+                            fontSize   = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color      = chipTextColor
+                        )
+                        if (isSelected) {
+                            Spacer(Modifier.width(2.dp))
+                            Icon(
+                                Icons.Filled.Check, null,
+                                tint = accent,
+                                modifier = Modifier.size(11.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

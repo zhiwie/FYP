@@ -54,7 +54,18 @@ data class FriendChatMessage(
     val songArtist: String? = null,
     val songAlbumArt: String? = null,
     val songSpotifyUri: String? = null,
-    val messageType: String = "text"
+    val messageType: String = "text",  // "text" | "song" | "mood" | "mood_history"
+    val mood: String? = null,
+    val moodEmoji: String? = null,
+    val moodNote: String? = null,
+    // mood_history fields
+    val mhDominantMood: String? = null,
+    val mhDominantEmoji: String? = null,
+    val mhTrend: String? = null,
+    val mhTopMoods: String? = null,      // JSON-like: "happy:45,calm:30,sad:25"
+    val mhStreak: Int? = null,
+    val mhTotalEntries: Int? = null,
+    val mhRangeLabel: String? = null
 )
 
 data class FriendSuggestion(
@@ -608,16 +619,26 @@ class SocialRepository {
                 val messages = snap?.documents?.map { doc ->
                     val ts = doc.getTimestamp("timestamp")?.toDate()?.time ?: System.currentTimeMillis()
                     FriendChatMessage(
-                        id             = doc.id,
-                        senderId       = doc.getString("senderId") ?: "",
-                        text           = doc.getString("text") ?: "",
-                        timestamp      = ts,
-                        isFromMe       = doc.getString("senderId") == me,
-                        songTitle      = doc.getString("songTitle"),
-                        songArtist     = doc.getString("songArtist"),
-                        songAlbumArt   = doc.getString("songAlbumArt"),
-                        songSpotifyUri = doc.getString("songSpotifyUri"),
-                        messageType    = doc.getString("messageType") ?: "text"
+                        id              = doc.id,
+                        senderId        = doc.getString("senderId") ?: "",
+                        text            = doc.getString("text") ?: "",
+                        timestamp       = ts,
+                        isFromMe        = doc.getString("senderId") == me,
+                        songTitle       = doc.getString("songTitle"),
+                        songArtist      = doc.getString("songArtist"),
+                        songAlbumArt    = doc.getString("songAlbumArt"),
+                        songSpotifyUri  = doc.getString("songSpotifyUri"),
+                        messageType     = doc.getString("messageType") ?: "text",
+                        mood            = doc.getString("mood"),
+                        moodEmoji       = doc.getString("moodEmoji"),
+                        moodNote        = doc.getString("moodNote"),
+                        mhDominantMood  = doc.getString("mhDominantMood"),
+                        mhDominantEmoji = doc.getString("mhDominantEmoji"),
+                        mhTrend         = doc.getString("mhTrend"),
+                        mhTopMoods      = doc.getString("mhTopMoods"),
+                        mhStreak        = doc.getLong("mhStreak")?.toInt(),
+                        mhTotalEntries  = doc.getLong("mhTotalEntries")?.toInt(),
+                        mhRangeLabel    = doc.getString("mhRangeLabel")
                     )
                 } ?: emptyList()
                 onUpdate(messages)
@@ -682,6 +703,78 @@ class SocialRepository {
         } catch (e: Exception) { Log.e(TAG, "sendSongMessage", e) }
     }
 
+    suspend fun sendMoodMessage(
+        friendUid: String,
+        mood: String,
+        moodEmoji: String,
+        note: String = ""
+    ) {
+        val me = uid() ?: return
+        try {
+            val convoId = chatDocId(me, friendUid)
+            val preview = "$moodEmoji Feeling $mood${if (note.isNotBlank()) " · $note" else ""}"
+            db.collection("chats").document(convoId).set(
+                mapOf(
+                    "participants"  to listOf(me, friendUid),
+                    "lastMessage"   to preview,
+                    "lastTimestamp" to Timestamp.now(),
+                    "lastSenderId"  to me
+                ),
+                SetOptions.merge()
+            ).await()
+            db.collection("chats").document(convoId).collection("messages")
+                .add(mapOf(
+                    "senderId"    to me,
+                    "text"        to preview,
+                    "timestamp"   to Timestamp.now(),
+                    "messageType" to "mood",
+                    "mood"        to mood,
+                    "moodEmoji"   to moodEmoji,
+                    "moodNote"    to note
+                )).await()
+        } catch (e: Exception) { Log.e(TAG, "sendMoodMessage", e) }
+    }
+
+    suspend fun sendMoodHistoryMessage(
+        friendUid: String,
+        dominantMood: String,
+        dominantEmoji: String,
+        trend: String,
+        topMoods: String,          // "happy:45,calm:30,sad:25"
+        currentStreak: Int,
+        totalEntries: Int,
+        rangeLabel: String
+    ) {
+        val me = uid() ?: return
+        try {
+            val convoId = chatDocId(me, friendUid)
+            val preview = "$dominantEmoji My $rangeLabel mood report — feeling $dominantMood mostly"
+            db.collection("chats").document(convoId).set(
+                mapOf(
+                    "participants"  to listOf(me, friendUid),
+                    "lastMessage"   to preview,
+                    "lastTimestamp" to Timestamp.now(),
+                    "lastSenderId"  to me
+                ),
+                SetOptions.merge()
+            ).await()
+            db.collection("chats").document(convoId).collection("messages")
+                .add(mapOf(
+                    "senderId"       to me,
+                    "text"           to preview,
+                    "timestamp"      to Timestamp.now(),
+                    "messageType"    to "mood_history",
+                    "mhDominantMood" to dominantMood,
+                    "mhDominantEmoji" to dominantEmoji,
+                    "mhTrend"        to trend,
+                    "mhTopMoods"     to topMoods,
+                    "mhStreak"       to currentStreak,
+                    "mhTotalEntries" to totalEntries,
+                    "mhRangeLabel"   to rangeLabel
+                )).await()
+        } catch (e: Exception) { Log.e(TAG, "sendMoodHistoryMessage", e) }
+    }
+
     suspend fun getChatMessages(friendUid: String): List<FriendChatMessage> {
         val me = uid() ?: return emptyList()
         return try {
@@ -693,16 +786,26 @@ class SocialRepository {
                     val ts = doc.getTimestamp("timestamp")?.toDate()?.time
                         ?: System.currentTimeMillis()
                     FriendChatMessage(
-                        id             = doc.id,
-                        senderId       = doc.getString("senderId") ?: "",
-                        text           = doc.getString("text") ?: "",
-                        timestamp      = ts,
-                        isFromMe       = doc.getString("senderId") == me,
-                        songTitle      = doc.getString("songTitle"),
-                        songArtist     = doc.getString("songArtist"),
-                        songAlbumArt   = doc.getString("songAlbumArt"),
-                        songSpotifyUri = doc.getString("songSpotifyUri"),
-                        messageType    = doc.getString("messageType") ?: "text"
+                        id              = doc.id,
+                        senderId        = doc.getString("senderId") ?: "",
+                        text            = doc.getString("text") ?: "",
+                        timestamp       = ts,
+                        isFromMe        = doc.getString("senderId") == me,
+                        songTitle       = doc.getString("songTitle"),
+                        songArtist      = doc.getString("songArtist"),
+                        songAlbumArt    = doc.getString("songAlbumArt"),
+                        songSpotifyUri  = doc.getString("songSpotifyUri"),
+                        messageType     = doc.getString("messageType") ?: "text",
+                        mood            = doc.getString("mood"),
+                        moodEmoji       = doc.getString("moodEmoji"),
+                        moodNote        = doc.getString("moodNote"),
+                        mhDominantMood  = doc.getString("mhDominantMood"),
+                        mhDominantEmoji = doc.getString("mhDominantEmoji"),
+                        mhTrend         = doc.getString("mhTrend"),
+                        mhTopMoods      = doc.getString("mhTopMoods"),
+                        mhStreak        = doc.getLong("mhStreak")?.toInt(),
+                        mhTotalEntries  = doc.getLong("mhTotalEntries")?.toInt(),
+                        mhRangeLabel    = doc.getString("mhRangeLabel")
                     )
                 }
         } catch (e: Exception) { Log.e(TAG, "getMessages", e); emptyList() }
