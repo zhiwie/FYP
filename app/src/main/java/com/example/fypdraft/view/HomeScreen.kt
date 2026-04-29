@@ -46,7 +46,6 @@ import com.example.fypdraft.data.repository.SpotifyMusicRepository
 import com.example.fypdraft.data.repository.SpotifyRepository
 import com.example.fypdraft.ml.MoodAwareRecommender
 import com.example.fypdraft.ml.PassiveMoodDetector
-import com.example.fypdraft.ml.RecommendedSection
 import com.example.fypdraft.ml.RLRecommendationEngine
 import com.example.fypdraft.ml.RewardEvent
 import com.example.fypdraft.ml.RewardType
@@ -380,15 +379,6 @@ fun HomeScreen(
         }
     }
 
-    // ── Section-definition cache — keyed by mood ─────────────────────────
-    // MoodAwareRecommender.buildQuery() appends live artist names from tasteProfile,
-    // producing slightly different query strings every call → search cache never hits.
-    // We fix this by locking in the section defs (title + query) the first time we
-    // generate them for a given mood, and reusing them on every subsequent load for
-    // that same mood within the session. This guarantees identical query strings →
-    // SpotifyMusicRepository's cache always hits on the 2nd+ load.
-    val sectionDefCache = remember { mutableMapOf<String, List<RecommendedSection>>() }
-
     // ── Load music sections (re-runs on mood change or Spotify connect) ───
     var lastLoadedMood by remember { mutableStateOf("") }
     LaunchedEffect(isSpotifyConnected, mascotMood.mood) {
@@ -396,7 +386,7 @@ fun HomeScreen(
             if (!isSpotifyConnected) { sections = emptyList(); hasLoaded = false }
             return@LaunchedEffect
         }
-        val moodChanged = lastLoadedMood != mascotMood.mood
+        val moodChanged  = lastLoadedMood != mascotMood.mood
         // Skip reload when already loaded and mood unchanged
         if (hasLoaded && sections.isNotEmpty() && !moodChanged) return@LaunchedEffect
         if (moodChanged && hasLoaded) hasLoaded = false
@@ -418,18 +408,17 @@ fun HomeScreen(
                 return@LaunchedEffect
             }
 
-            // ── Stable section definitions (cached per mood) ─────────────
-            // We generate once per mood per session and lock the query strings in.
-            // This is the key fix: same mood → same query strings → search cache hits.
-            val recommended = sectionDefCache.getOrPut(mascotMood.mood) {
-                MoodAwareRecommender.generateSections(
-                    currentMood        = mascotMood.mood,
-                    personalityProfile = personalityProfile,
-                    isUserOverride     = mascotMood.isUserOverride,
-                    rlEngine           = rlEngine,
-                    tasteProfile       = tasteProfile
-                ).take(3) // 3 sections = max 3 API calls per full load
-            }
+            // ── Personalised section generation ──────────────────────────
+            // Cap at 5 sections; fetch SEQUENTIALLY to respect rate-limit gate.
+            val recommended = MoodAwareRecommender.generateSections(
+                currentMood        = mascotMood.mood,
+                personalityProfile = personalityProfile,
+                isUserOverride     = mascotMood.isUserOverride,
+                rlEngine           = rlEngine,
+                tasteProfile       = tasteProfile
+            ).take(5)
+
+            data class SectionDef(val title: String, val emoji: String, val query: String)
 
             val results = mutableListOf<MusicSection>()
             for (sec in recommended) {
@@ -439,15 +428,25 @@ fun HomeScreen(
                     Log.w("HomeScreen", "Rate-limited mid-load — stopping (${waitSec}s remaining)")
                     break
                 }
+                val def = SectionDef(sec.title, sec.emoji, sec.query)
                 try {
-                    val tracks = if (sec.query == "PERSONALIZED") {
-                        try { spotifyMusicRepo.getPersonalizedTracks(10) }
+                    val tracks = if (def.query == "PERSONALIZED") {
+                        val top   = try { spotifyMusicRepo.getPersonalizedTracks(5) }
                         catch (_: Exception) { emptyList() }
+                        val q     = rlEngine.getMoodSearchQuery(mascotMood.mood).ifBlank { mascotMood.mood }
+                        val mood2 = try { spotifyMusicRepo.searchTracks(q, 5) }
+                        catch (_: Exception) { emptyList() }
+                        val b = mutableListOf<Track>()
+                        for (i in 0 until maxOf(top.size, mood2.size)) {
+                            if (i < top.size)  b.add(top[i])
+                            if (i < mood2.size) b.add(mood2[i])
+                        }
+                        b.distinctBy { it.id }
                     } else {
-                        spotifyMusicRepo.searchTracks(sec.query, 10)
+                        spotifyMusicRepo.searchTracks(def.query, 10)
                     }
                     if (tracks.isNotEmpty()) {
-                        results.add(MusicSection(sec.title, sec.emoji, tracks))
+                        results.add(MusicSection(def.title, def.emoji, tracks))
                         sections = results.toList()   // progressive render
                     }
                 } catch (_: Exception) { /* skip failed section, continue */ }
@@ -469,15 +468,18 @@ fun HomeScreen(
         isLoading = false
     }
 
-    // ── Auto-retry poller — when rate-limited, re-check every 5 minutes ─────
+    // ── Auto-retry poller — when rate-limited, re-check every 15 s ──────────
+    // When the rate-limit window expires this sets hasLoaded=false which
+    // re-triggers the main LaunchedEffect above for a clean retry.
     LaunchedEffect(isSpotifyConnected) {
         while (true) {
-            delay(5 * 60 * 1000L) // 5 minutes
+            delay(15_000)
             val repo = spotifyMusicRepo ?: continue
             if (!repo.isRateLimited() && loadError?.startsWith("⏳") == true) {
-                loadError = null
-                hasLoaded = false
-                sections  = emptyList()
+                // Rate-limit window just expired — clear error and trigger reload
+                loadError  = null
+                hasLoaded  = false
+                sections   = emptyList()
             }
         }
     }
@@ -609,6 +611,25 @@ fun HomeScreen(
                             checkInState       = checkInState,
                             onCheckIn          = { mood -> checkInVm.checkIn(mood) },
                             onCheckInRaw       = { key -> checkInVm.checkInRaw(key) },
+                            onMoodPick         = { key ->
+                                // 1. Update mascot mood immediately (isUserOverride = true prevents passive override)
+                                val old = mascotMood.mood
+                                mascotMood = MascotMoodDetector.getMoodForKey(key).copy(isUserOverride = true)
+                                // 2. Persist mood key → MoodSyncApp.savedMoodKey updates → themeManager.updateMood fires
+                                onMoodSelected(key)
+                                // 3. updateMood on petRepo triggers LaunchedEffect(mascotMood.mood) above
+                                //    which calls localPetRepo.updateMood → petState.mood → MoodSyncApp theme update
+                                localPetRepo.updateMood(key)
+                                // 4. Reset so music sections reload for the new mood
+                                hasLoaded = false
+                                chatMessage = null
+                                // 5. Log to mood history
+                                moodHistoryRepo.saveMoodExplicit(key, "Emotion picker: changed from $old to $key")
+                                // 6. Tell RL engine mood was manually overridden
+                                scope.launch {
+                                    rlEngine.recordReward(RewardEvent(RewardType.MOOD_OVERRIDE, old, null))
+                                }
+                            },
                             themeState         = themeState
                         )
                     }
