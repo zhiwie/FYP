@@ -221,14 +221,17 @@ fun LibraryScreen(
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             bottomBar = {
-                BottomNavBar(
-                    currentTab = currentTab,
-                    onHome     = onNavigateToHome,
-                    onSearch   = onNavigateToSearch,
-                    onFriends  = onNavigateToFriends,
-                    onLibrary  = {},
-                    themeState = themeState
-                )
+                Column {
+                    MiniMusicPlayer(vm = musicPlayerViewModel, onNav = onNavigateToMusicPlayer, themeState = themeState)
+                    BottomNavBar(
+                        currentTab = currentTab,
+                        onHome     = onNavigateToHome,
+                        onSearch   = onNavigateToSearch,
+                        onFriends  = onNavigateToFriends,
+                        onLibrary  = {},
+                        themeState = themeState
+                    )
+                }
             }
         ) { padding ->
             Column(

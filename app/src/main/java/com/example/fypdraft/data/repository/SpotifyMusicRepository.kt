@@ -9,9 +9,6 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
-import com.example.fypdraft.ml.MetadataEmotionTagger
-import com.example.fypdraft.model.TrackMood
-import com.example.fypdraft.ml.MoodPipeline
 
 /**
  * Spotify-backed music repository.
@@ -38,13 +35,6 @@ class SpotifyMusicRepository(
         if (token == null) Log.e(TAG, "No valid Spotify token available")
         return token
     }
-
-    /**
-     * Exposes the access token for external callers (e.g. MusicPlayerViewModel
-     * fetching /audio-features directly). Returns null if no valid token.
-     */
-    fun getTokenForFeatures(): String? = spotifyRepository.getAccessToken()
-
 
     private fun buildRequest(url: String, token: String): Request =
         Request.Builder()
@@ -82,12 +72,12 @@ class SpotifyMusicRepository(
 
     private val SPOTIFY_MAX_SEARCH_LIMIT = 10
 
-    suspend fun searchTracks(query: String, limit: Int = 10): List<Track> = withContext(Dispatchers.IO) {
+    suspend fun searchTracks(query: String, limit: Int = 10, startOffset: Int = 0): List<Track> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext emptyList()
         val token   = getToken() ?: return@withContext emptyList()
 
         val allTracks = mutableListOf<Track>()
-        var offset    = 0
+        var offset    = startOffset   // start from caller-supplied offset for variety on refresh
         val desired   = limit.coerceAtLeast(1)
         var done      = false
 
@@ -408,36 +398,26 @@ class SpotifyMusicRepository(
         for (i in 0 until items.length()) {
             try {
                 val item       = items.getJSONObject(i)
-                val trackName  = item.getString("name")
                 val artistName = item.getJSONArray("artists").getJSONObject(0).getString("name")
                 val album      = item.optJSONObject("album")
-                val albumName  = album?.optString("name") ?: ""
                 val artUrl     = album?.optJSONArray("images")?.optJSONObject(0)?.optString("url") ?: ""
                 val previewUrl = item.optString("preview_url", "null")
                 val uri        = item.optString("uri", "null")
-
-                // Synchronous mood tag — runs in < 0.1 ms, no network call.
-                // Low-confidence tracks will be re-tagged via GPT fallback when loaded.
-                val moodResult = MoodPipeline.tagSync(trackName, artistName, albumName)
-
                 tracks.add(Track(
-                    id             = item.getString("id"),
-                    name           = trackName,
-                    artist         = artistName,
-                    album          = albumName,
-                    albumArtUrl    = artUrl,
-                    previewUrl     = if (previewUrl != "null" && previewUrl.isNotBlank()) previewUrl else null,
-                    durationMs     = item.optLong("duration_ms", 0L),
-                    spotifyUri     = if (uri != "null" && uri.isNotBlank()) uri else null,
-                    mood           = moodResult.mood,
-                    moodConfidence = moodResult.confidence,
-                    moodSource     = moodResult.source,
-                    moodReason     = moodResult.reason
+                    id          = item.getString("id"),
+                    name        = item.getString("name"),
+                    artist      = artistName,
+                    album       = album?.optString("name") ?: "",
+                    albumArtUrl = artUrl,
+                    previewUrl  = if (previewUrl != "null" && previewUrl.isNotBlank()) previewUrl else null,
+                    durationMs  = item.optLong("duration_ms", 0L),
+                    spotifyUri  = if (uri != "null" && uri.isNotBlank()) uri else null
                 ))
             } catch (e: Exception) {
                 Log.w(TAG, "Parse error at $i", e)
             }
         }
+        // ── THE ROOT FIX: dedup here means every single caller is safe ──
         return tracks.distinctBy { it.id }
     }
 

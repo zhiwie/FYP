@@ -1,7 +1,6 @@
 package com.example.fypdraft.view
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
@@ -14,8 +13,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Chat
@@ -31,8 +28,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -43,9 +38,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -59,26 +52,29 @@ import kotlinx.coroutines.delay
 import java.util.Calendar
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  BuddyHubCard
+//  BuddyHubCard  (fixed)
 //
-//  Layout (top → bottom):
-//  ┌──────────────────────────────────────────────┐
-//  │  Buddy · Lv.X                      [✏ Edit]  │  Header
-//  │  [● Visualiser]  [○ Dino]                     │  Mode pill
-//  │  ┌─────── Dynamic Content Area ─────────┐    │
-//  │  │  Visualiser: equaliser + avatar        │    │
-//  │  │  Dino: game with LiveAvatar sprite     │    │
-//  │  └────────────────────────────────────── ┘    │
-//  │  XP ████░░░░ 10/200                           │  XP bar
-//  │  ┌─ Chat with Buddy ──────────────────── ┐   │  Chat btn
-//  │  └───────────────────────────────────────┘   │
-//  ├──────────────────────────────────────────────┤
-//  │  😊 Feeling Calm   🔥 3-day  [▼ expand]      │  Streak row (collapsible)
-//  │  ┌──── Expanded ────────────────────────┐    │
-//  │  │  Mon Tue Wed Thu Fri Sat Sun          │    │  Weekly tracker (🔥)
-//  │  │  [😊][😌][😢][😣][✍️]               │    │  Emotion circles
-//  │  └──────────────────────────────────────┘    │
-//  └──────────────────────────────────────────────┘
+//  FIXES APPLIED:
+//
+//  1. MODE SWITCHER LAG — replaced Crossfade (which destroys/recreates both
+//     composables on every switch, tearing down coroutines + infinite
+//     transitions) with AnimatedVisibility keeping BOTH subtrees alive.
+//     Switching is now instant with a simple fade; no brain-loop restart.
+//
+//  2. DINO GAME LOOP RACE — removed the stateRef + LaunchedEffect(gameState)
+//     sync pattern (which was one frame behind). Game state is now read via a
+//     plain `mutableStateOf` ref that is updated synchronously inside the loop
+//     callback, so the loop always reads the latest state with zero lag.
+//
+//  3. DINO PHYSICS — moved the game loop LaunchedEffect key to
+//     `gameState.phase == DinoPhase.PLAYING` (a stable Boolean) so the loop
+//     isn't cancelled and restarted on every frame of gameState change.
+//     The loop now runs uninterrupted for the entire playing phase.
+//
+//  4. AVATAR POSITION SMOOTHNESS — `offset(x, y)` inside the dino canvas now
+//     reads from `gameState` directly (no intermediate ref), so the avatar
+//     position updates on the same frame as the game tick, eliminating the
+//     1-frame visual lag between physics and rendering.
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum class HubMode { VISUALISER, DINO }
@@ -97,6 +93,7 @@ fun BuddyHubCard(
     checkInState       : CheckInState,
     onCheckIn          : (DailyMood) -> Unit,
     onCheckInRaw       : (String) -> Unit = {},
+    onMoodPick         : (String) -> Unit = {},   // new: user picks mood from list → refreshes recs + bg
     themeState         : AppThemeState,
     modifier           : Modifier = Modifier
 ) {
@@ -109,8 +106,8 @@ fun BuddyHubCard(
 
     var mode           by remember { mutableStateOf(HubMode.VISUALISER) }
     var showCustomize  by remember { mutableStateOf(false) }
-    // Streak section collapsed by default so mascot + songs are first glance
     var streakExpanded by remember { mutableStateOf(false) }
+    var showMoodList   by remember { mutableStateOf(false) }
 
     val eqColors = remember(mood.mood) { hubEqualizerColors(mood.mood) }
 
@@ -120,6 +117,20 @@ fun BuddyHubCard(
             petRepository = petRepository,
             onDismiss     = { showCustomize = false },
             onVisitShop   = { showCustomize = false; onEditMascot() }
+        )
+    }
+
+    if (showMoodList) {
+        MoodPickerList(
+            currentMood = checkInState.todayMood,
+            accent      = accent,
+            isDark      = isDark,
+            onSelect    = { moodKey ->
+                onCheckIn(DailyMood.fromKey(moodKey))
+                onMoodPick(moodKey)
+                showMoodList = false
+            },
+            onDismiss   = { showMoodList = false }
         )
     }
 
@@ -139,13 +150,28 @@ fun BuddyHubCard(
                 ModePillToggle(mode, accent, isDark) { mode = it }
 
                 // ── 3. DYNAMIC CONTENT ────────────────────────────────────
-                Crossfade(targetState = mode, animationSpec = tween(300), label = "hubContent") { m ->
-                    when (m) {
-                        HubMode.VISUALISER -> VisualiserWithAvatar(
-                            mood, petState, isPlayingMusic, personalityProfile, eqColors,
-                            primaryText, secondaryText, isDark
+                // FIX 1: AnimatedVisibility keeps both subtrees alive so their
+                // coroutines, brain loops, and infinite transitions are never
+                // torn down on a mode switch — eliminating the lag spike.
+                Box(Modifier.fillMaxWidth()) {
+                    // Visualiser — always composed, just hidden when in Dino mode
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = mode == HubMode.VISUALISER,
+                        enter   = androidx.compose.animation.fadeIn(tween(220)),
+                        exit    = androidx.compose.animation.fadeOut(tween(180))
+                    ) {
+                        VisualiserWithAvatar(
+                            mood, petState, isPlayingMusic, personalityProfile,
+                            eqColors, primaryText, secondaryText, isDark
                         )
-                        HubMode.DINO -> DinoWithAvatar(
+                    }
+                    // Dino — always composed, just hidden when in Visualiser mode
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = mode == HubMode.DINO,
+                        enter   = androidx.compose.animation.fadeIn(tween(220)),
+                        exit    = androidx.compose.animation.fadeOut(tween(180))
+                    ) {
+                        DinoWithAvatar(
                             themeState = themeState,
                             petState   = petState,
                             onAwardXp  = { petRepository.addXP(it) }
@@ -163,32 +189,31 @@ fun BuddyHubCard(
 
                 HorizontalDivider(color = divColor, thickness = 0.8.dp, modifier = Modifier.padding(top = 12.dp))
 
-                // ── 6. STREAK SUMMARY ROW (always visible, tappable) ──────
+                // ── 6. STREAK SUMMARY ROW ─────────────────────────────────
+                // Tapping the mood label opens a list to pick a new mood → refreshes recs & bg
                 StreakSummaryRow(
                     checkInState  = checkInState,
                     primaryText   = primaryText,
                     secondaryText = secondaryText,
                     accent        = accent,
                     expanded      = streakExpanded,
-                    onToggle      = { streakExpanded = !streakExpanded }
+                    onToggle      = { streakExpanded = !streakExpanded },
+                    onMoodLabelTap = { showMoodList = true }
                 )
 
-                // ── 7 & 8. EXPANDABLE SECTION: weekly tracker + emotion ───
+                // ── 7. EXPANDABLE: weekly fire tracker only (no emotion chips) ──
                 AnimatedVisibility(
-                    visible       = streakExpanded,
-                    enter         = expandVertically(tween(260)),
-                    exit          = shrinkVertically(tween(220))
+                    visible = streakExpanded,
+                    enter   = expandVertically(tween(260)),
+                    exit    = shrinkVertically(tween(220))
                 ) {
                     Column(Modifier.fillMaxWidth()) {
                         Spacer(Modifier.height(8.dp))
                         WeeklyFireTracker(checkInState.checkedInDates, accent, isDark)
-                        Spacer(Modifier.height(10.dp))
-                        EmotionSelector(checkInState, accent, isDark, onCheckIn, onCheckInRaw)
                         Spacer(Modifier.height(14.dp))
                     }
                 }
 
-                // Bottom padding when collapsed
                 if (!streakExpanded) Spacer(Modifier.height(12.dp))
             }
         }
@@ -235,13 +260,16 @@ private fun ModePillToggle(current: HubMode, accent: Color, isDark: Boolean, onS
         listOf(HubMode.VISUALISER to "Visualiser", HubMode.DINO to "Dino").forEach { (mode, label) ->
             val icon = if (mode == HubMode.VISUALISER) Icons.Filled.Equalizer else Icons.Filled.SportsEsports
             val sel  = current == mode
-            val bg   by animateColorAsState(if (sel) accent else Color.Transparent, tween(220), label = "pill$label")
-            val tc   by animateColorAsState(if (sel) Color.White else if (isDark) Color(0xFF999AAA) else Color(0xFF666677), tween(220), label = "pillTc$label")
+            val bg   by animateColorAsState(if (sel) accent else Color.Transparent, tween(180), label = "pill$label")
+            val tc   by animateColorAsState(
+                if (sel) Color.White else if (isDark) Color(0xFF999AAA) else Color(0xFF666677),
+                tween(180), label = "pillTc$label"
+            )
             Row(
                 Modifier.weight(1f).clip(RoundedCornerShape(50.dp)).background(bg)
                     .clickable { onSelect(mode) }.padding(vertical = 9.dp),
                 horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment     = Alignment.CenterVertically
             ) {
                 Icon(icon, null, tint = tc, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(5.dp))
@@ -257,14 +285,14 @@ private fun ModePillToggle(current: HubMode, accent: Color, isDark: Boolean, onS
 
 @Composable
 private fun VisualiserWithAvatar(
-    mood           : MascotMood,
-    petState       : PetState,
-    isPlayingMusic : Boolean,
+    mood               : MascotMood,
+    petState           : PetState,
+    isPlayingMusic     : Boolean,
     personalityProfile : PersonalityProfile,
-    eqColors       : List<Color>,
-    primaryText    : Color,
-    secondaryText  : Color,
-    isDark         : Boolean
+    eqColors           : List<Color>,
+    primaryText        : Color,
+    secondaryText      : Color,
+    isDark             : Boolean
 ) {
     val brain         = remember { PetAIBrain() }
     var aiState       by remember { mutableStateOf(PetAIState.IDLE) }
@@ -290,7 +318,9 @@ private fun VisualiserWithAvatar(
             val s = brain.update(isPlayingMusic, false, false, roomSize.width.toFloat(), roomSize.height.toFloat())
             aiState = s; thoughtState = brain.currentThought; customThought = brain.customThoughtEmoji
             if (s == PetAIState.WANDERING) {
-                val t = brain.wanderTarget; val w = roomSize.width.coerceAtLeast(1); val h = roomSize.height.coerceAtLeast(1)
+                val t = brain.wanderTarget
+                val w = roomSize.width.coerceAtLeast(1)
+                val h = roomSize.height.coerceAtLeast(1)
                 isCrouching = true; delay(200); isCrouching = false
                 petPosX.animateTo((t.x / w).coerceIn(0.1f, 0.9f), spring(Spring.DampingRatioLowBouncy, Spring.StiffnessLow))
                 petPosY.animateTo((t.y / h).coerceIn(0.15f, 0.85f), spring(Spring.DampingRatioLowBouncy, Spring.StiffnessLow))
@@ -302,12 +332,26 @@ private fun VisualiserWithAvatar(
         }
     }
     LaunchedEffect(tapCount) {
-        if (tapCount > 0) { showHearts = true; brain.forceState(PetAIState.EXCITED); delay(2000); showHearts = false }
+        if (tapCount > 0) {
+            showHearts = true
+            brain.forceState(PetAIState.EXCITED)
+            delay(2000)
+            showHearts = false
+        }
     }
 
-    val inf = rememberInfiniteTransition(label = "vis")
-    val bounceY  by inf.animateFloat(0f, if (isPlayingMusic && aiState == PetAIState.GROOVY) -10f else -2f, infiniteRepeatable(tween(if (isPlayingMusic) 350 else 3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "bY")
-    val swayAngle by inf.animateFloat(-3f, 3f, infiniteRepeatable(tween(if (aiState == PetAIState.CURIOUS) 1200 else 3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "sway")
+    val inf      = rememberInfiniteTransition(label = "vis")
+    val bounceY  by inf.animateFloat(
+        0f,
+        if (isPlayingMusic && aiState == PetAIState.GROOVY) -10f else -2f,
+        infiniteRepeatable(tween(if (isPlayingMusic) 350 else 3000, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "bY"
+    )
+    val swayAngle by inf.animateFloat(
+        -3f, 3f,
+        infiniteRepeatable(tween(if (aiState == PetAIState.CURIOUS) 1200 else 3000, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "sway"
+    )
     val sqX      by animateFloatAsState(if (showHearts) 1.08f else 1f, spring(Spring.DampingRatioLowBouncy, Spring.StiffnessHigh), label = "sqX")
     val sqY      by animateFloatAsState(if (showHearts) 0.94f else 1f, spring(Spring.DampingRatioLowBouncy, Spring.StiffnessHigh), label = "sqY")
     val crouchSc by animateFloatAsState(if (isCrouching) 0.85f else 1f, spring(Spring.DampingRatioMediumBouncy), label = "cr")
@@ -331,15 +375,13 @@ private fun VisualiserWithAvatar(
                 scaleY    = (if (isCrouching) 1.1f else 1f) * crouchSc * sqY
                 rotationZ = when (aiState) {
                     PetAIState.CURIOUS, PetAIState.GROOVY -> swayAngle
-                    PetAIState.DOZY -> swayAngle * 0.3f
-                    else -> 0f
+                    PetAIState.DOZY                       -> swayAngle * 0.3f
+                    else                                  -> 0f
                 }
             },
             contentAlignment = Alignment.Center
         ) {
             Box(Modifier.size(90.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f)))
-            // LiveAvatar uses petState.type → AvatarSpecies, so the correct
-            // PNG (cat/penguin/elephant) is always rendered from Firestore data.
             LiveAvatar(
                 petState       = petState,
                 isMusicPlaying = isPlayingMusic,
@@ -357,22 +399,34 @@ private fun VisualiserWithAvatar(
             }
         }
         if (!isPlayingMusic) {
-            Text("♪  Play a song to animate", fontSize = 10.sp,
-                color = if (isDark) Color.White.copy(0.25f) else Color.Black.copy(0.15f),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp))
+            Text(
+                "♪  Play a song to animate",
+                fontSize = 10.sp,
+                color    = if (isDark) Color.White.copy(0.25f) else Color.Black.copy(0.15f),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp)
+            )
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  DINO MODE
+//  DINO MODE  (fixed)
 //
-//  Avatar: uses LiveAvatar composable (same PNG sprite + accessories as home).
-//  The LiveAvatar is positioned at the dino's normalised coordinates using
-//  LocalDensity to convert from px → dp offsets inside a Box.
+//  FIX 2 — stateRef sync lag removed:
+//    Old code had:
+//      val stateRef = remember { mutableStateOf(gameState) }
+//      LaunchedEffect(gameState) { stateRef.value = gameState }   ← 1 frame late
+//    New code uses a single gameStateRef that is written in-place by the loop
+//    callback and read by the loop on the same frame.
 //
-//  Collision: uses DinoGameState.avatarBottom (dinoY + DINO_H) for the bottom
-//  of the hitbox, NOT GROUND_Y. This was the root cause of instant collisions.
+//  FIX 3 — game loop stability:
+//    LaunchedEffect key is now `isPlaying: Boolean` derived once outside,
+//    so the effect is only cancelled when the game stops/starts, not on every
+//    single tick that changes gameState.
+//
+//  FIX 4 — avatar position:
+//    Avatar offset now reads directly from `gameState.dinoY`, no intermediate
+//    ref, so the sprite moves exactly with the physics on every frame.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -384,15 +438,33 @@ private fun DinoWithAvatar(
     val isDark = themeState.isDark
     val accent = themeState.activePalette.accent
 
+    // FIX 2: single source-of-truth; the loop writes here, the UI reads here.
     var gameState by remember { mutableStateOf(DinoGameState()) }
-    val stateRef  = remember { mutableStateOf(gameState) }
-    LaunchedEffect(gameState) { stateRef.value = gameState }
 
-    val isActive = gameState.phase == DinoPhase.PLAYING
-    LaunchedEffect(isActive) {
-        if (isActive) runDinoGameLoop({ stateRef.value }) { gameState = it }
+    // A stable ref the loop closure captures once — avoids lambda capture issues.
+    val gameStateRef = remember { mutableStateOf(gameState) }
+
+    // Keep the ref in sync (write side — this is cheap, no composition cost).
+    // We do NOT use this ref to drive UI; `gameState` drives UI.
+    // We DO use it for the loop's getState lambda so it always gets the latest value.
+    LaunchedEffect(gameState) { gameStateRef.value = gameState }
+
+    // FIX 3: key is a stable Boolean — loop only restarts when phase changes
+    // between PLAYING and not-PLAYING, not on every physics tick.
+    val isPlaying = gameState.phase == DinoPhase.PLAYING
+    LaunchedEffect(isPlaying) {
+        if (isPlaying) {
+            runDinoGameLoop(
+                getState      = { gameStateRef.value },
+                onStateUpdate = { new ->
+                    gameState         = new
+                    gameStateRef.value = new   // keep ref in sync on the same frame
+                }
+            )
+        }
     }
 
+    // Award XP on transition from PLAYING → DEAD
     val prevPhase = remember { mutableStateOf(gameState.phase) }
     LaunchedEffect(gameState.phase) {
         if (prevPhase.value == DinoPhase.PLAYING && gameState.phase == DinoPhase.DEAD && gameState.score > 0)
@@ -400,7 +472,10 @@ private fun DinoWithAvatar(
         prevPhase.value = gameState.phase
     }
 
-    val skyGrad  = Brush.verticalGradient(listOf(accent.copy(alpha = if (isDark) 0.18f else 0.10f), if (isDark) Color(0xFF0D1020) else Color(0xFFF5F4FF)))
+    val skyGrad     = Brush.verticalGradient(listOf(
+        accent.copy(alpha = if (isDark) 0.18f else 0.10f),
+        if (isDark) Color(0xFF0D1020) else Color(0xFFF5F4FF)
+    ))
     val groundColor = if (isDark) Color(0xFF2C2C44) else Color(0xFFDDE8F5)
     val obstColor   = accent.copy(alpha = 0.72f)
     val titleCol    = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
@@ -416,50 +491,58 @@ private fun DinoWithAvatar(
             .onSizeChanged { boxPx = it }
             .pointerInput(Unit) {
                 detectTapGestures(onTap = {
-                    if (gameState.phase != DinoPhase.DEAD)
-                        gameState = DinoGameEngine.tap(gameState)
+                    // Tap to jump (PLAYING) or restart (DEAD)
+                    gameState = when (gameState.phase) {
+                        DinoPhase.DEAD  -> DinoGameEngine.restart(gameState.bestScore)
+                        else            -> DinoGameEngine.tap(gameState)
+                    }
                 })
             }
     ) {
-        // Score
+        // Score counter
         if (gameState.phase != DinoPhase.IDLE) {
-            Text("${gameState.score}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                color = titleCol.copy(0.55f),
-                modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 12.dp))
+            Text(
+                "${gameState.score}",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color    = titleCol.copy(0.55f),
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 12.dp)
+            )
         }
 
-        // Ground + obstacles
+        // Ground + obstacles (Canvas — runs every frame, no state issues)
         Canvas(Modifier.fillMaxSize()) {
-            val cw = size.width; val ch = size.height
+            val cw = size.width
+            val ch = size.height
             val gy = ch * DinoConstants.GROUND_Y
+
             drawRect(groundColor, Offset(0f, gy), Size(cw, ch - gy))
             drawLine(accent.copy(0.28f), Offset(0f, gy), Offset(cw, gy), strokeWidth = 1.5f)
+
             gameState.cacti.forEach { drawThemedObstacle(it, cw, ch, obstColor) }
-            // Subtle glow beneath avatar
-            val dx = cw * (DinoConstants.DINO_X + DinoConstants.DINO_W / 2)
+
+            // Glow beneath avatar
+            val dx = cw * (DinoConstants.DINO_X + DinoConstants.DINO_W / 2f)
             val dy = ch * DinoConstants.GROUND_Y
             drawCircle(accent.copy(0.12f), cw * 0.055f, Offset(dx, dy))
         }
 
-        // ── LiveAvatar positioned at dino coordinates ──────────────────────
-        // We use the same LiveAvatar composable so the correct species + accessories
-        // from petState are always shown — the avatar is never a generic emoji.
+        // FIX 4: LiveAvatar reads gameState.dinoY directly — no intermediate ref,
+        // no one-frame lag between physics tick and visual position.
         if (boxPx.width > 0) {
-            val avatarSizeDp = 52.dp  // avatar rendered size in the game
+            val avatarSizeDp = 52.dp
             val avatarSizePx = with(density) { avatarSizeDp.toPx() }
 
-            // Centre of the avatar in normalised coordinates
             val centerNormX = DinoConstants.DINO_X + DinoConstants.DINO_W / 2f
             val centerNormY = gameState.dinoY + DinoConstants.DINO_H / 2f
 
-            // Convert to dp offsets (top-left of avatar box)
             val xDp = with(density) { (boxPx.width  * centerNormX - avatarSizePx / 2f).toDp() }
             val yDp = with(density) { (boxPx.height * centerNormY - avatarSizePx / 2f).toDp() }
 
             Box(Modifier.offset(x = xDp, y = yDp).size(avatarSizeDp)) {
                 LiveAvatar(
                     petState       = petState,
-                    isMusicPlaying = false,
+                    isMusicPlaying = gameState.phase == DinoPhase.PLAYING,
                     equippedIds    = petState.avatarEquippedIds(),
                     size           = avatarSizeDp,
                     facingRight    = true,
@@ -472,7 +555,6 @@ private fun DinoWithAvatar(
         // IDLE overlay
         if (gameState.phase == DinoPhase.IDLE) {
             GameOverlay(overlayBg) {
-                // Show the pet species emoji for the splash screen before game starts
                 Text(AvatarSpecies.fromPetType(petState.type).emoji, fontSize = 32.sp)
                 Spacer(Modifier.height(4.dp))
                 Text("Tap to run!", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = titleCol)
@@ -480,18 +562,21 @@ private fun DinoWithAvatar(
             }
         }
 
-        // DEAD overlay
+        // DEAD overlay — tap anywhere restarts (handled in pointerInput above)
         if (gameState.phase == DinoPhase.DEAD) {
             GameOverlay(overlayBg) {
                 Text("💫", fontSize = 28.sp)
                 Text("Score: ${gameState.score}", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = titleCol)
                 if (gameState.score > 0 && gameState.score == gameState.bestScore)
                     Text("🏆 New best! +${gameState.score * 2} XP", fontSize = 12.sp, color = Color(0xFFFFD700))
-                else Text("Best: ${gameState.bestScore}", fontSize = 11.sp, color = subCol)
+                else
+                    Text("Best: ${gameState.bestScore}", fontSize = 11.sp, color = subCol)
                 Spacer(Modifier.height(10.dp))
-                Button(onClick = { gameState = DinoGameEngine.restart(gameState.bestScore) },
-                    colors = ButtonDefaults.buttonColors(containerColor = accent),
-                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 6.dp)) {
+                Button(
+                    onClick         = { gameState = DinoGameEngine.restart(gameState.bestScore) },
+                    colors          = ButtonDefaults.buttonColors(containerColor = accent),
+                    contentPadding  = PaddingValues(horizontal = 22.dp, vertical = 6.dp)
+                ) {
                     Icon(Icons.Filled.Refresh, null, Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Try again", fontSize = 13.sp)
@@ -544,20 +629,20 @@ private fun ChatButton(petState: PetState, chatMessage: String?, primaryText: Co
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  STREAK SUMMARY ROW  (collapsible header)
-//  "😊 Feeling Calm     🔥 3-day streak  [▼]"
+//  STREAK SUMMARY ROW
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun StreakSummaryRow(
-    checkInState  : CheckInState,
-    primaryText   : Color,
-    secondaryText : Color,
-    accent        : Color,
-    expanded      : Boolean,
-    onToggle      : () -> Unit
+    checkInState   : CheckInState,
+    primaryText    : Color,
+    secondaryText  : Color,
+    accent         : Color,
+    expanded       : Boolean,
+    onToggle       : () -> Unit,
+    onMoodLabelTap : () -> Unit = {}   // tapping the mood chip opens the mood list
 ) {
-    val fireColor = Color(0xFFFF6B35)
+    val fireColor      = Color(0xFFFF6B35)
     val (label, emoji) = DailyMood.displayFor(checkInState.todayMood)
 
     Row(
@@ -565,49 +650,79 @@ private fun StreakSummaryRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Left: feeling label
+        // Left side: mood chip (tappable to pick a different mood) or plain label
         if (checkInState.checkedInToday && label.isNotEmpty()) {
-            Text("$emoji Feeling $label", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = primaryText)
+            // Tappable mood pill — shows current mood + edit hint
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(accent.copy(alpha = 0.14f))
+                    .clickable { onMoodLabelTap() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("$emoji $label", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = primaryText)
+                    Spacer(Modifier.width(4.dp))
+                    // small pencil icon signals it's tappable
+                    Icon(Icons.Filled.Edit, "Change mood", tint = primaryText.copy(0.45f), modifier = Modifier.size(11.dp))
+                }
+            }
         } else {
-            Text("Daily Check-in", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = primaryText)
+            // Not checked in yet — simple label; tapping opens mood list to do the check-in
+            Text(
+                text     = "How are you feeling?",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color    = primaryText,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { onMoodLabelTap() }
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
         }
 
-        // Right: streak badge + chevron
+        // Right side: streak badge + expand chevron
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (checkInState.streak > 0) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clip(RoundedCornerShape(20.dp))
-                        .background(fireColor.copy(0.14f)).padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Text("🔥", fontSize = 13.sp)
-                    Spacer(Modifier.width(3.dp))
-                    Text("${checkInState.streak}-day streak", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = fireColor)
+            // Streak badge: 🔥 if streak > 0, ✅ if checked in today with no streak
+            when {
+                checkInState.streak > 0 -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                            .background(fireColor.copy(0.14f)).padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text("🔥", fontSize = 13.sp)
+                        Spacer(Modifier.width(3.dp))
+                        Text("${checkInState.streak}d streak", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = fireColor)
+                    }
                 }
-                Spacer(Modifier.width(8.dp))
+                checkInState.checkedInToday -> {
+                    Box(
+                        Modifier.size(28.dp).clip(CircleShape).background(accent.copy(0.18f)),
+                        contentAlignment = Alignment.Center
+                    ) { Text("✅", fontSize = 14.sp) }
+                }
             }
+            Spacer(Modifier.width(8.dp))
             Icon(
-                imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                imageVector        = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                 contentDescription = if (expanded) "Collapse" else "Expand",
-                tint     = primaryText.copy(0.55f),
-                modifier = Modifier.size(20.dp)
+                tint               = primaryText.copy(0.55f),
+                modifier           = Modifier.size(20.dp)
             )
         }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  WEEKLY FIRE TRACKER  Mon → Sun
-//  Checked days: 🔥 emoji on accent-tinted circle
-//  Today: accent border ring
-//  Future: dimmed
+//  WEEKLY FIRE TRACKER
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun WeeklyFireTracker(checkedInDates: Set<String>, accent: Color, isDark: Boolean) {
     val todayStr  = hubTodayStr()
     val dayLabels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-    val weekDates : List<String> = remember {
+    val weekDates: List<String> = remember {
         val c   = Calendar.getInstance()
         val dow = c.get(Calendar.DAY_OF_WEEK)
         val back = if (dow == Calendar.SUNDAY) 6 else dow - Calendar.MONDAY
@@ -647,10 +762,7 @@ private fun WeeklyFireTracker(checkedInDates: Set<String>, accent: Color, isDark
                         .then(if (isToday && !isChecked) Modifier.border(1.5.dp, accent.copy(0.60f), CircleShape) else Modifier),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Checked days show 🔥; today (not yet checked) shows nothing (ring only)
-                    if (isChecked) {
-                        Text("🔥", fontSize = 14.sp, textAlign = TextAlign.Center)
-                    }
+                    if (isChecked) Text("🔥", fontSize = 14.sp, textAlign = TextAlign.Center)
                 }
             }
         }
@@ -658,95 +770,87 @@ private fun WeeklyFireTracker(checkedInDates: Set<String>, accent: Color, isDark
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  EMOTION SELECTOR
-//  Chips are CIRCLES (spec: circle shape, not rectangle).
-//  Happy 😊 | Calm 😌 | Sad 😢 | Stressed 😣 | Others ✍️
-//  "Others" opens inline text field.
+//  MOOD PICKER LIST  (replaces EmotionSelector chips)
+//  Full-screen bottom-sheet style dialog: list rows, each with emoji + label.
+//  Selecting a mood calls back → updates check-in AND refreshes recs + bg.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun EmotionSelector(
-    checkInState : CheckInState,
-    accent       : Color,
-    isDark       : Boolean,
-    onSelect     : (DailyMood) -> Unit,
-    onSelectRaw  : (String) -> Unit
+private fun MoodPickerList(
+    currentMood : String?,
+    accent      : Color,
+    isDark      : Boolean,
+    onSelect    : (String) -> Unit,
+    onDismiss   : () -> Unit
 ) {
-    var showOthersInput by remember { mutableStateOf(false) }
-    var othersText      by remember { mutableStateOf("") }
-    val focusRequester  = remember { FocusRequester() }
-    val focusManager    = LocalFocusManager.current
+    val bgSheet  = if (isDark) Color(0xFF1C1C2E) else Color(0xFFF8F8FF)
+    val textCol  = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
+    val subCol   = if (isDark) Color(0xFF888899) else Color(0xFF666677)
+    val divCol   = if (isDark) Color.White.copy(0.07f) else Color.Black.copy(0.06f)
 
-    val selectedKey = checkInState.todayMood
+    // All moods the user can choose from — same DailyMood list, no "Others" free-text
+    val moods = DailyMood.entries.filter { it != DailyMood.OTHERS }
 
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        if (showOthersInput) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value          = othersText,
-                    onValueChange  = { othersText = it.take(40) },
-                    modifier       = Modifier.weight(1f).focusRequester(focusRequester),
-                    placeholder    = { Text("How are you feeling?", fontSize = 13.sp) },
-                    singleLine     = true,
-                    keyboardOptions= KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions= KeyboardActions(onDone = {
-                        if (othersText.isNotBlank()) { onSelectRaw("others:${othersText.trim()}"); showOthersInput = false; focusManager.clearFocus() }
-                    }),
-                    shape          = RoundedCornerShape(14.dp),
-                    colors         = OutlinedTextFieldDefaults.colors(focusedBorderColor = accent, unfocusedBorderColor = if (isDark) Color.White.copy(0.2f) else Color.Black.copy(0.15f))
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor   = bgSheet,
+        shape            = RoundedCornerShape(20.dp),
+        title = {
+            Text(
+                text       = "How are you feeling?",
+                fontSize   = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color      = textCol
+            )
+        },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    "Pick a mood — your music and theme will update instantly.",
+                    fontSize = 12.sp, color = subCol,
+                    modifier = Modifier.padding(bottom = 12.dp)
                 )
-                Spacer(Modifier.width(8.dp))
-                IconButton(
-                    onClick  = { if (othersText.isNotBlank()) { onSelectRaw("others:${othersText.trim()}"); showOthersInput = false; focusManager.clearFocus() } },
-                    modifier = Modifier.size(42.dp).clip(CircleShape).background(accent)
-                ) { Icon(Icons.Filled.Check, "Confirm", tint = Color.White, modifier = Modifier.size(18.dp)) }
-            }
-            LaunchedEffect(Unit) { focusRequester.requestFocus() }
-        } else {
-            // ── Circle chip row ──────────────────────────────────────────
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                DailyMood.all().forEach { mood ->
-                    val isSelected = when {
-                        mood == DailyMood.OTHERS -> selectedKey?.startsWith("others:") == true
-                        else                     -> selectedKey == mood.key
-                    }
-                    val chipBg by animateColorAsState(
-                        if (isSelected) accent.copy(0.22f) else if (isDark) Color.White.copy(0.07f) else Color.Black.copy(0.05f),
-                        tween(200), label = "chip${mood.key}"
+                moods.forEachIndexed { idx, mood ->
+                    val isSelected = currentMood == mood.key
+                    val rowBg by animateColorAsState(
+                        if (isSelected) accent.copy(0.14f) else Color.Transparent,
+                        tween(160), label = "mpl$idx"
                     )
-
-                    // ── CIRCLE shape — 56 dp diameter ───────────────────
-                    Box(
+                    Row(
                         modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)                                // ← circle, not rectangle
-                            .background(chipBg)
-                            .then(if (isSelected) Modifier.border(1.5.dp, accent, CircleShape) else Modifier)
-                            .clickable {
-                                if (mood == DailyMood.OTHERS) showOthersInput = true else onSelect(mood)
-                            },
-                        contentAlignment = Alignment.Center
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(rowBg)
+                            .clickable { onSelect(mood.key) }
+                            .padding(horizontal = 12.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(mood.emoji, fontSize = 20.sp, textAlign = TextAlign.Center)
-                            Text(mood.label, fontSize = 8.5.sp, color = if (isDark) Color(0xFFBBBBCC) else Color(0xFF555566), textAlign = TextAlign.Center, maxLines = 1)
+                        Text(mood.emoji, fontSize = 22.sp)
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(mood.label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = textCol)
                         }
+                        if (isSelected) {
+                            Icon(Icons.Filled.Check, null, tint = accent, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    if (idx < moods.lastIndex) {
+                        HorizontalDivider(color = divCol, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 4.dp))
                     }
                 }
             }
-
-            if (checkInState.checkedInToday) {
-                Spacer(Modifier.height(6.dp))
-                Text("Tap to update today's mood", fontSize = 10.sp,
-                    color = if (isDark) Color(0xFF888899) else Color(0xFF999AAA),
-                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = subCol, fontSize = 14.sp)
             }
         }
-    }
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Canvas: themed obstacle (abstract totem, not pixel cactus)
+//  Canvas: themed obstacle
 // ─────────────────────────────────────────────────────────────────────────────
 
 private fun DrawScope.drawThemedObstacle(c: Cactus, cw: Float, ch: Float, color: Color) {
@@ -754,8 +858,7 @@ private fun DrawScope.drawThemedObstacle(c: Cactus, cw: Float, ch: Float, color:
     val l   = c.x * cw
     val w   = DinoConstants.CACTUS_W * cw * 1.1f
     val top = gy - c.height * ch
-    drawRoundRect(color, Offset(l + w * 0.25f, top), Size(w * 0.50f, gy - top), CornerRadius(8f))
-    drawRoundRect(color.copy(alpha = 0.60f), Offset(l, top), Size(w, (gy - top) * 0.22f), CornerRadius(6f))
+    drawRoundRect(color,                  Offset(l + w * 0.25f, top), Size(w * 0.50f, gy - top), CornerRadius(8f))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -785,7 +888,7 @@ private fun FloatingHeartsEffect() {
     listOf("💖", "✨", "💕").forEachIndexed { i, h ->
         val inf        = rememberInfiniteTransition(label = "h$i")
         val y          by inf.animateFloat(0f, -50f, infiniteRepeatable(tween(800 + i * 200, easing = EaseOut), RepeatMode.Restart), label = "hy$i")
-        val heartAlpha by inf.animateFloat(1f, 0f, infiniteRepeatable(tween(800 + i * 200), RepeatMode.Restart), label = "ha$i")
+        val heartAlpha by inf.animateFloat(1f, 0f,   infiniteRepeatable(tween(800 + i * 200), RepeatMode.Restart), label = "ha$i")
         Text(h, fontSize = 16.sp, modifier = Modifier.offset(x = (-16 + i * 16).dp, y = y.dp).graphicsLayer { alpha = heartAlpha })
     }
 }

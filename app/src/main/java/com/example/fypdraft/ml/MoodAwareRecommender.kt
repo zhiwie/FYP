@@ -16,16 +16,14 @@ object MoodAwareRecommender {
     /**
      * Generate sections with personalised queries.
      *
-     * New: accepts [tasteProfile] to inject real artist/genre/language signals
-     * into every query. A user who listens to K-pop will get K-pop results
-     * in every section — not just the PERSONALIZED one.
+     * so every refresh returns genuinely different Spotify results.
      */
     fun generateSections(
-        currentMood:       String,
-        personalityProfile: PersonalityProfile = PersonalityProfile(),
-        isUserOverride:    Boolean             = false,
-        rlEngine:          RLRecommendationEngine? = null,
-        tasteProfile:      UserTasteProfile    = UserTasteProfile()   // ← NEW
+        currentMood:        String,
+        personalityProfile: PersonalityProfile     = PersonalityProfile(),
+        isUserOverride:     Boolean                = false,
+        rlEngine:           RLRecommendationEngine? = null,
+        tasteProfile:       UserTasteProfile       = UserTasteProfile(),
     ): List<RecommendedSection> {
         val sections    = mutableListOf<RecommendedSection>()
         val time        = TimeOfDay.current()
@@ -56,12 +54,10 @@ object MoodAwareRecommender {
             ))
         }
 
-        // Artist-based section — only added if we have real history
         if (tasteProfile.topArtists.size >= 3) {
             sections.add(getArtistAffinitySection(tasteProfile).copy(priority = 80))
         }
 
-        // Language-specific section — only added for non-English dominant users
         if (tasteProfile.dominantLanguage != "en" && tasteProfile.topArtists.isNotEmpty()) {
             sections.add(getLanguageSection(tasteProfile).copy(priority = 72))
         }
@@ -69,7 +65,6 @@ object MoodAwareRecommender {
         sections.add(getDiscoverySection(personality, tasteProfile).copy(priority = 50))
         sections.add(getWildcardSection(currentMood, time, tasteProfile).copy(priority = 40))
 
-        // RL boost/demote
         val scored = sections
             .distinctBy { it.query }
             .map { section ->
@@ -84,29 +79,164 @@ object MoodAwareRecommender {
         return scored
     }
 
+    // ── Synonym query pools ───────────────────────────────────────────────
+    // Spotify treats these as different queries → genuinely different results.
+
+    private val MOOD_QUERY_POOLS = mapOf(
+        "happy" to listOf(
+            "happy uplifting feel good pop sunshine bright",
+            "joyful cheerful fun dance positive vibes music",
+            "upbeat celebrate party groove summer hits 2024",
+            "smile good mood energizing pop feel great music",
+            "carefree breezy light pop fun indie happy songs"
+        ),
+        "sad" to listOf(
+            "sad emotional ballad comfort heartbreak songs",
+            "melancholy heartbroken lonely slow ballad music",
+            "sorrowful tearful acoustic soft sad indie songs",
+            "bittersweet longing emotional piano sad music",
+            "rainy day sad slow emotional breakup songs"
+        ),
+        "energetic" to listOf(
+            "energetic workout hype pump up bass drop",
+            "high energy adrenaline intense power anthem gym",
+            "beast mode hustle grind hype rap trap fire",
+            "turnt lit hype festival edm drop banger 2024",
+            "aggressive hard hitting heavy bass run sprint pump"
+        ),
+        "calm" to listOf(
+            "chill ambient relaxing peaceful gentle lofi",
+            "tranquil serene mellow acoustic soft meditation",
+            "quiet cosy warm soft background music relax",
+            "gentle piano slow calm instrumental ambient focus",
+            "zen peaceful nature sounds lofi study coffee"
+        ),
+        "focused" to listOf(
+            "focus study instrumental lofi beats concentration",
+            "deep work concentration flow state ambient music",
+            "productivity coding study beats minimal music",
+            "brain focus alpha waves instrumental study lofi",
+            "studying reading work from home ambient music"
+        ),
+        "tired" to listOf(
+            "soft gentle acoustic slow soothing lullaby",
+            "wind down slow tempo mellow soft quiet night",
+            "sleepy drowsy soft indie folk night music",
+            "gentle sleep calming night slow acoustic music",
+            "cosy quiet slow ambient bedtime sleep music"
+        ),
+        "romantic" to listOf(
+            "romantic love songs r&b smooth slow dance",
+            "intimate love acoustic guitar romantic ballad",
+            "slow dance date night soul r&b smooth love",
+            "sensual moody r&b love bedroom late night",
+            "warm tender love pop romantic heartfelt songs"
+        ),
+        "angry" to listOf(
+            "aggressive rock metal punk heavy cathartic",
+            "rage fury hard rock screaming intense music",
+            "angry loud heavy guitar metal punk songs",
+            "cathartic release loud heavy angry rap metal",
+            "intense aggressive dark heavy music angst"
+        ),
+        "anxious" to listOf(
+            "calming anxiety relief meditation peaceful ambient",
+            "breathing slow calm soothing anxiety help music",
+            "gentle reassuring warm slow soft music calm",
+            "grounding mindful peaceful soft anxiety calm",
+            "stress relief slow gentle calming nature music"
+        )
+    )
+
+    private val TIME_QUERY_POOLS = mapOf(
+        "morning" to listOf(
+            "morning feel good happy start day acoustic",
+            "wake up fresh morning energy gentle pop music",
+            "sunrise morning acoustic indie bright new day",
+            "good morning positive upbeat start day pop",
+            "morning coffee acoustic chill start day music"
+        ),
+        "afternoon" to listOf(
+            "afternoon chill pop indie feel good",
+            "midday upbeat pop groove bright afternoon music",
+            "afternoon feel good indie pop sunny music",
+            "daytime energy pop bright cheerful afternoon",
+            "afternoon vibes chill pop sunny indie music"
+        ),
+        "evening" to listOf(
+            "evening chill r&b smooth jazz soul",
+            "sunset evening mellow r&b smooth music",
+            "after work unwind evening smooth r&b jazz",
+            "evening relax smooth mellow soul jazz music",
+            "twilight evening soft r&b chill music"
+        ),
+        "night" to listOf(
+            "late night r&b smooth jazz soul chill",
+            "midnight dark ambient electronic moody music",
+            "night drive dark slow moody music late",
+            "late night chill slow r&b moody music",
+            "night quiet slow ambient dark moody music"
+        )
+    )
+
+    private val PERSONALITY_QUERY_POOLS = mapOf(
+        "ZEN" to listOf(
+            "meditation yoga ambient nature sounds peaceful",
+            "zen mindful calm spiritual ambient slow music",
+            "peaceful nature birds water ambient meditation",
+            "yoga flow gentle peaceful ambient music calm",
+            "mindfulness slow breath calm nature ambient"
+        ),
+        "PARTY" to listOf(
+            "club bangers dance edm house party 2025",
+            "party hits dance floor edm banger 2024",
+            "rave techno dance floor club edm music",
+            "festival dance music pop edm party 2024",
+            "hype party hits dance floor top songs"
+        ),
+        "EMO" to listOf(
+            "indie emotional alternative deep lyrics meaningful",
+            "emo sad indie rock emotional alternative lyrics",
+            "deep meaningful sad alternative indie music",
+            "introspective sad indie emotional alternative",
+            "heartfelt raw emotional indie rock alternative"
+        ),
+        "SCHOLAR" to listOf(
+            "instrumental classical piano ambient electronic focus",
+            "study deep work focus brain lofi classical",
+            "concentration flow state study ambient music",
+            "smart focus classical instrumental piano music",
+            "lofi hip hop study beats brain focus music"
+        ),
+        "EXPLORER" to listOf(
+            "underrated indie new artists emerging debut album",
+            "hidden gems new music discovery indie 2024",
+            "underground indie emerging artists fresh music",
+            "new rising artists indie folk alternative 2024",
+            "fresh finds new music underrated artists indie"
+        ),
+        "NIGHTOWL" to listOf(
+            "dark ambient electronic experimental late night bass",
+            "midnight dark moody electronic bass music",
+            "late night dark ambient synth electronic music",
+            "nocturnal dark bass underground electronic music",
+            "after midnight dark moody ambient electronic"
+        )
+    )
+
+    private fun pickQuery(pool: List<String>): String =
+        pool[0]
+
     // ── Personalised query builder ────────────────────────────────────────
 
-    /**
-     * Builds a Spotify search query from a base keyword string + taste seeds.
-     *
-     * Strategy:
-     *  - If user has known top artists for this mood, append 1–2 of them.
-     *  - If user has a dominant genre, append its search keyword.
-     *  - Language seeds are appended for non-English users to shift Spotify's
-     *    ranking toward region-relevant content.
-     *
-     * Example output for a K-pop/happy user:
-     *   "happy uplifting feel good pop" → "happy uplifting feel good pop BLACKPINK twice kpop korean"
-     */
     private fun buildQuery(
-        base:        String,
-        mood:        String,
+        base:         String,
+        mood:         String,
         tasteProfile: UserTasteProfile,
-        maxArtists:  Int = 2
+        maxArtists:   Int = 2
     ): String {
         val parts = mutableListOf(base)
 
-        // 1. Mood-specific artist seeds from listening history
         val moodArtists = tasteProfile.moodArtistSeeds[mood]
             ?.filter { it !in tasteProfile.skippedArtists }
             ?.take(maxArtists)
@@ -115,21 +245,14 @@ object MoodAwareRecommender {
         if (moodArtists.isNotEmpty()) {
             parts.addAll(moodArtists)
         } else if (tasteProfile.topArtists.isNotEmpty()) {
-            // Fall back to general top artists if no mood-specific ones
             parts.add(tasteProfile.topArtists.first())
         }
 
-        // 2. Dominant genre seed
         val topGenre = tasteProfile.genreWeights.entries
             .filter { it.value >= 0.3f }
-            .maxByOrNull { it.value }
-            ?.key
+            .maxByOrNull { it.value }?.key
+        if (topGenre != null) parts.add(genreToSearchKeyword(topGenre))
 
-        if (topGenre != null) {
-            parts.add(genreToSearchKeyword(topGenre))
-        }
-
-        // 3. Language seed for non-English users
         val langSeed = languageToSearchSeed(tasteProfile.dominantLanguage)
         if (langSeed.isNotEmpty()) parts.add(langSeed)
 
@@ -157,21 +280,13 @@ object MoodAwareRecommender {
         else -> ""
     }
 
-    // ── Section builders (now personalised) ──────────────────────────────
+    // ── Section builders ──────────────────────────────────────────────────
 
-    private fun getMoodSection(mood: String, t: UserTasteProfile): RecommendedSection {
-        val base = when (mood) {
-            "happy"     -> "happy uplifting feel good pop sunshine bright"
-            "sad"       -> "sad emotional ballad comfort heartbreak"
-            "energetic" -> "energetic workout hype pump up bass drop"
-            "calm"      -> "chill ambient relaxing peaceful gentle lofi"
-            "focused"   -> "focus study instrumental lofi beats concentration"
-            "tired"     -> "soft gentle acoustic slow soothing lullaby"
-            "romantic"  -> "romantic love songs r&b smooth slow dance"
-            "angry"     -> "aggressive rock metal punk heavy cathartic"
-            "anxious"   -> "calming anxiety relief meditation peaceful ambient"
-            else        -> "popular hits trending top songs 2025"
-        }
+    private fun getMoodSection(
+        mood: String, t: UserTasteProfile
+    ): RecommendedSection {
+        val pool  = MOOD_QUERY_POOLS[mood] ?: MOOD_QUERY_POOLS["happy"]!!
+        val base  = pickQuery(pool)
         val title = when (mood) {
             "happy"     -> "Matching your happy vibes"
             "sad"       -> "For how you're feeling"
@@ -192,106 +307,111 @@ object MoodAwareRecommender {
         return RecommendedSection(title, emoji, buildQuery(base, mood, t))
     }
 
-    private fun getTherapeuticSection(mood: String, t: UserTasteProfile): RecommendedSection? {
+    private fun getTherapeuticSection(
+        mood: String, t: UserTasteProfile
+    ): RecommendedSection? {
         val (base, title, emoji) = when (mood) {
-            "sad"     -> Triple("uplifting motivational happy empowering anthems",
-                "Want to feel better?", "🌟")
-            "angry"   -> Triple("calm peaceful gentle acoustic meditation nature",
-                "Cool down with these", "🧊")
-            "anxious" -> Triple("relaxing breathing meditation spa nature sounds",
-                "Breathe easy", "🍃")
-            "tired"   -> Triple("energetic morning motivation wake up coffee beats",
-                "Pick-me-up boost", "☕")
+            "sad"     -> Triple("uplifting motivational happy empowering anthems", "Want to feel better?", "🌟")
+            "angry"   -> Triple("calm peaceful gentle acoustic meditation nature", "Cool down with these", "🧊")
+            "anxious" -> Triple("relaxing breathing meditation spa nature sounds", "Breathe easy", "🍃")
+            "tired"   -> Triple("energetic morning motivation wake up coffee beats", "Pick-me-up boost", "☕")
             else      -> return null
         }
-        // Therapeutic sections intentionally avoid strong artist seeds
-        // so they can introduce unfamiliar calming/uplifting artists
         return RecommendedSection(title, emoji, buildQuery(base, mood, t, maxArtists = 0))
     }
 
-    /**
-     * NEW: Section built entirely from the user's real top artists.
-     * "More from artists you love" — bypasses mood keywords entirely.
-     */
-    private fun getArtistAffinitySection(t: UserTasteProfile): RecommendedSection {
-        // Use liked artists first, then top played artists
-        val seeds = (t.likedArtists + t.topArtists)
+    private fun getArtistAffinitySection(
+        t: UserTasteProfile
+    ): RecommendedSection {
+        // Rotate which artists we seed with across refreshes for variety
+        val allSeeds = (t.likedArtists + t.topArtists)
             .distinct()
             .filter { it !in t.skippedArtists }
-            .take(3)
-        val query = seeds.joinToString(" ") + " similar"
-        return RecommendedSection(
-            title    = "More from artists you love",
-            emoji    = "❤️",
-            query    = query
-        )
+        // Shift the window of artists used: refresh 0→[0,1,2], refresh 1→[1,2,3], etc.
+        val start   = 0
+        val seeds   = allSeeds.drop(start).take(3).ifEmpty { allSeeds.take(3) }
+        val query   = seeds.joinToString(" ") + " similar"
+        return RecommendedSection("More from artists you love", "❤️", query)
     }
 
-    /**
-     * NEW: Section in the user's dominant non-English language.
-     * Only added when dominantLanguage != "en".
-     */
-    private fun getLanguageSection(t: UserTasteProfile): RecommendedSection {
-        val (langLabel, baseQuery) = when (t.dominantLanguage) {
-            "ko" -> "K-Pop" to "kpop korean trending popular 2025"
-            "zh" -> "C-Pop" to "mandopop chinese popular hits"
-            "ja" -> "J-Pop" to "jpop japanese anime popular"
-            "ms" -> "Malay" to "malay bahasa popular hits"
-            else -> return RecommendedSection("Global Picks","🌍","world music trending 2025")
+    private fun getLanguageSection(
+        t: UserTasteProfile
+    ): RecommendedSection {
+        val pools = when (t.dominantLanguage) {
+            "ko" -> listOf(
+                "kpop korean trending popular 2024",
+                "korean pop music popular hits recent",
+                "kpop girl group boy band trending songs",
+                "korean music popular chart hits 2024",
+                "kpop new releases trending korean artists"
+            )
+            "zh" -> listOf(
+                "mandopop chinese popular hits",
+                "chinese pop music trending taiwan hong kong",
+                "mandarin pop music popular recent hits",
+                "chinese music popular chart hits artists",
+                "c-pop mandopop trending songs artists"
+            )
+            "ja" -> listOf(
+                "jpop japanese anime popular",
+                "japanese music popular chart hits 2024",
+                "j-pop trending songs japanese artists recent",
+                "anime ost japanese popular music hits",
+                "jpop girl group boy band japanese trending"
+            )
+            "ms" -> listOf(
+                "malay bahasa popular hits",
+                "lagu melayu popular trending malaysia",
+                "malay music popular chart hits artists",
+                "bahasa malaysia popular songs trending",
+                "lagu popular melayu terbaru hits"
+            )
+            else -> listOf("world music trending popular 2024")
         }
-        // Seed with top artists from this language
+        val base = pickQuery(pools)
         val artistSeeds = t.topArtists.take(2).joinToString(" ")
+        val (langLabel, langEmoji) = when (t.dominantLanguage) {
+            "ko" -> "K-Pop" to "🇰🇷"
+            "zh" -> "C-Pop" to "🇨🇳"
+            "ja" -> "J-Pop" to "🇯🇵"
+            "ms" -> "Malay" to "🇲🇾"
+            else -> "Global" to "🌏"
+        }
         return RecommendedSection(
-            title = "🎵 $langLabel picks for you",
-            emoji = when (t.dominantLanguage) {
-                "ko" -> "🇰🇷"; "zh" -> "🇨🇳"; "ja" -> "🇯🇵"; "ms" -> "🇲🇾"; else -> "🌏"
-            },
-            query = "$baseQuery $artistSeeds".trim()
+            "$langEmoji $langLabel picks for you", langEmoji,
+            "$base $artistSeeds".trim()
         )
     }
 
-    private fun getTimeSection(time: TimeOfDay, personality: PetPersonality,
-                               t: UserTasteProfile): RecommendedSection {
-        val base = when (time) {
-            TimeOfDay.MORNING -> when (personality) {
-                PetPersonality.PARTY   -> "morning energy hype pump up dance edm"
-                PetPersonality.SCHOLAR -> "morning focus study lofi beats productive"
-                PetPersonality.ZEN     -> "morning meditation peaceful gentle awakening"
-                else -> "morning feel good happy start day acoustic"
-            }
-            TimeOfDay.AFTERNOON -> when (personality) {
-                PetPersonality.PARTY   -> "afternoon hype party dance trending hits"
-                PetPersonality.SCHOLAR -> "afternoon focus instrumental ambient study"
-                else -> "afternoon chill pop indie feel good"
-            }
-            TimeOfDay.EVENING -> "evening chill r&b smooth jazz soul"
-            TimeOfDay.NIGHT   -> "late night r&b smooth jazz soul chill"
-        }
-        val title = when (time) {
+    private fun getTimeSection(
+        time: TimeOfDay, personality: PetPersonality,
+        t: UserTasteProfile
+    ): RecommendedSection {
+        val timeKey = time.label.lowercase()
+        val pool    = TIME_QUERY_POOLS[timeKey] ?: TIME_QUERY_POOLS["afternoon"]!!
+        val base    = pickQuery(pool)
+        val title   = when (time) {
             TimeOfDay.MORNING   -> "Good morning tunes"
             TimeOfDay.AFTERNOON -> "Afternoon picks"
             TimeOfDay.EVENING   -> "Evening wind-down"
             TimeOfDay.NIGHT     -> "Late night vibes"
         }
-        return RecommendedSection(title, when(time){
+        val emoji   = when (time) {
             TimeOfDay.MORNING->"🌅"; TimeOfDay.AFTERNOON->"☀️"
             TimeOfDay.EVENING->"🌆"; TimeOfDay.NIGHT->"🌙"
-        }, buildQuery(base, "neutral", t, maxArtists = 1))
+        }
+        return RecommendedSection(title, emoji, buildQuery(base, "neutral", t, maxArtists = 1))
     }
 
-    private fun getPersonalitySection(personality: PetPersonality,
-                                      t: UserTasteProfile): RecommendedSection {
-        val base = when (personality) {
-            PetPersonality.ZEN      -> "meditation yoga ambient nature sounds peaceful"
-            PetPersonality.PARTY    -> "club bangers dance edm house party 2025"
-            PetPersonality.EMO      -> "indie emotional alternative deep lyrics meaningful"
-            PetPersonality.SCHOLAR  -> "instrumental classical piano ambient electronic focus"
-            PetPersonality.EXPLORER -> "underrated indie new artists emerging debut album"
-            PetPersonality.NIGHTOWL -> "dark ambient electronic experimental late night bass"
-        }
+    private fun getPersonalitySection(
+        personality: PetPersonality, t: UserTasteProfile
+    ): RecommendedSection {
+        val key  = personality.name
+        val pool = PERSONALITY_QUERY_POOLS[key] ?: PERSONALITY_QUERY_POOLS["EXPLORER"]!!
+        val base = pickQuery(pool)
         return RecommendedSection(
             "${personality.emoji} ${personality.name.lowercase().replaceFirstChar { it.uppercase() }} picks",
-            when(personality){
+            when(personality) {
                 PetPersonality.ZEN->"🧘"; PetPersonality.PARTY->"🎉"
                 PetPersonality.EMO->"🌧️"; PetPersonality.SCHOLAR->"📚"
                 PetPersonality.EXPLORER->"🔍"; PetPersonality.NIGHTOWL->"🦉"
@@ -300,24 +420,36 @@ object MoodAwareRecommender {
         )
     }
 
-    private fun getDiscoverySection(personality: PetPersonality,
-                                    t: UserTasteProfile): RecommendedSection {
-        // Discovery intentionally uses a genre the user has NOT explored heavily
+    private fun getDiscoverySection(
+        personality: PetPersonality, t: UserTasteProfile
+    ): RecommendedSection {
         val weakGenre = listOf("indie","classical","jazz","reggae","folk","world")
-            .firstOrNull { (t.genreWeights[it] ?: 0f) < 0.2f }
-            ?: "world music"
-        val base = "$weakGenre new artists emerging music"
-        return RecommendedSection("Try something new", "🔮", base)
+            .firstOrNull { (t.genreWeights[it] ?: 0f) < 0.2f } ?: "world music"
+        // Rotate discovery angle each refresh
+        val discoveryAngles = listOf(
+            "$weakGenre new artists emerging music",
+            "$weakGenre hidden gems underrated recent",
+            "$weakGenre fresh releases debut 2024",
+            "$weakGenre independent artists new music",
+            "$weakGenre rising artists new discovery"
+        )
+        return RecommendedSection("Try something new", "🔮",
+            pickQuery(discoveryAngles))
     }
 
-    private fun getWildcardSection(mood: String, time: TimeOfDay,
-                                   t: UserTasteProfile): RecommendedSection {
-        val base = "acoustic covers popular songs stripped back"
+    private fun getWildcardSection(
+        mood: String, time: TimeOfDay, t: UserTasteProfile
+    ): RecommendedSection {
+        val wildcards = listOf(
+            "acoustic covers popular songs stripped back",
+            "throwback hits nostalgia 2000s 2010s classics",
+            "viral tiktok trending songs 2024 popular",
+            "road trip singalong anthems driving songs",
+            "coffee shop acoustic chill background music"
+        )
         return RecommendedSection("Something different", "🎲",
-            buildQuery(base, mood, t, maxArtists = 1))
+            buildQuery(pickQuery(wildcards), mood, t, maxArtists = 1))
     }
-
-    // ── Helpers (unchanged) ───────────────────────────────────────────────
 
     private fun getPersonalizedTitle(personality: PetPersonality): String = when (personality) {
         PetPersonality.ZEN      -> "Curated for your calm soul"

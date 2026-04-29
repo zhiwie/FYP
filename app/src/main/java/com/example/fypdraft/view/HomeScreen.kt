@@ -23,7 +23,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -156,7 +155,6 @@ fun HomeScreen(
     onNavigateToEmotionChat: (pendingMessage: String?) -> Unit = {},
     onNavigateToMoodHistory: () -> Unit = {},
     onNavigateToPetShop: () -> Unit = {},
-    onNavigateToFlappyGame: () -> Unit = {},
     onSignOut: () -> Unit = {},
     onMascotVisibilityChanged: (Boolean) -> Unit = {},
     currentTab: Int = 0
@@ -193,8 +191,6 @@ fun HomeScreen(
     var loadError    by remember { mutableStateOf<String?>(null) }
     var hasLoaded    by remember { mutableStateOf(false) }
     var tasteProfile by remember { mutableStateOf(UserTasteProfile()) }
-    // Incrementing this forces the section LaunchedEffect to re-run regardless of mood/connect state
-    var refreshKey   by remember { mutableIntStateOf(0) }
 
     var mascotMood by remember {
         val initial = if (savedMoodKey != null)
@@ -380,15 +376,14 @@ fun HomeScreen(
 
     // ── Load music sections (re-runs on mood change or Spotify connect) ───
     var lastLoadedMood by remember { mutableStateOf("") }
-    LaunchedEffect(isSpotifyConnected, mascotMood.mood, refreshKey) {
+    LaunchedEffect(isSpotifyConnected, mascotMood.mood) {
         if (!isSpotifyConnected || spotifyMusicRepo == null) {
             if (!isSpotifyConnected) { sections = emptyList(); hasLoaded = false }
             return@LaunchedEffect
         }
         val moodChanged  = lastLoadedMood != mascotMood.mood
-        val isRefresh    = refreshKey > 0
-        // Skip reload only when: already loaded, mood unchanged, and not a manual refresh
-        if (hasLoaded && sections.isNotEmpty() && !moodChanged && !isRefresh) return@LaunchedEffect
+        // Skip reload when already loaded and mood unchanged
+        if (hasLoaded && sections.isNotEmpty() && !moodChanged) return@LaunchedEffect
         if (moodChanged && hasLoaded) hasLoaded = false
         lastLoadedMood = mascotMood.mood; isLoading = true; loadError = null
         try { rlEngine.loadState() } catch (_: Exception) {}
@@ -406,7 +401,7 @@ fun HomeScreen(
                 personalityProfile = personalityProfile,
                 isUserOverride     = mascotMood.isUserOverride,
                 rlEngine           = rlEngine,
-                tasteProfile       = tasteProfile   // injects artist/genre/language seeds
+                tasteProfile       = tasteProfile
             )
 
             data class SectionDef(val title: String, val emoji: String, val query: String)
@@ -465,6 +460,7 @@ fun HomeScreen(
                 displayName   = displayName,
                 email         = currentUser?.email ?: "",
                 isDark        = isDark,
+                themeState    = themeState,
                 onSettings    = { scope.launch { drawerState.close() }; onNavigateToSettings() },
                 onSpotify     = { scope.launch { drawerState.close() }; onNavigateToSpotify() },
                 onMoodHistory = { scope.launch { drawerState.close() }; onNavigateToMoodHistory() },
@@ -581,68 +577,18 @@ fun HomeScreen(
                             checkInState       = checkInState,
                             onCheckIn          = { mood -> checkInVm.checkIn(mood) },
                             onCheckInRaw       = { key -> checkInVm.checkInRaw(key) },
+                            onMoodPick         = { moodKey ->
+                                // Update mascot mood → triggers theme + recommendation refresh
+                                mascotMood = MascotMoodDetector.getMoodForKey(moodKey).copy(isUserOverride = true)
+                                onMoodSelected(moodKey)
+                            },
                             themeState         = themeState
                         )
                     }
 
                     Spacer(Modifier.height(16.dp))
 
-                    // ── Flappy Game banner ────────────────────────────────
-                    FlappyGameBanner(
-                        petName   = petState.name,
-                        bestScore = petState.bondingPoints,
-                        isDark    = isDark,
-                        onClick   = { onNavigateToFlappyGame() }
-                    )
-
                     Spacer(Modifier.height(24.dp))
-
-                    // ── Music sections header with refresh button ─────────
-                    if (sections.isNotEmpty() || hasLoaded) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment     = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "For You",
-                                fontSize   = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color      = secondaryTextColor
-                            )
-                            val refreshAngle by animateFloatAsState(
-                                targetValue   = if (isLoading) 360f else 0f,
-                                animationSpec = if (isLoading)
-                                    infiniteRepeatable(tween(800, easing = LinearEasing))
-                                else tween(0),
-                                label = "refreshSpin"
-                            )
-                            IconButton(
-                                onClick  = {
-                                    if (!isLoading) {
-                                        hasLoaded  = false
-                                        loadError  = null
-                                        sections   = emptyList()
-                                        refreshKey++
-                                    }
-                                },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    Icons.Filled.Refresh,
-                                    contentDescription = "Refresh recommendations",
-                                    tint     = if (isLoading)
-                                        secondaryTextColor.copy(alpha = 0.4f)
-                                    else secondaryTextColor,
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .graphicsLayer { rotationZ = refreshAngle }
-                                )
-                            }
-                        }
-                    }
 
                     // ── Music sections ────────────────────────────────────
                     when {
@@ -786,88 +732,6 @@ fun HomeScreen(
             },
             onDismiss = { showMoodPicker = false }
         )
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Flappy Game Banner
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun FlappyGameBanner(
-    petName:   String,
-    bestScore: Int,
-    isDark:    Boolean,
-    onClick:   () -> Unit
-) {
-    val inf = rememberInfiniteTransition(label = "banner_pulse")
-    val glowAlpha by inf.animateFloat(
-        initialValue  = 0.7f,
-        targetValue   = 1f,
-        animationSpec = infiniteRepeatable(tween(900, easing = EaseInOutSine), RepeatMode.Reverse),
-        label         = "glow"
-    )
-    val birdBounce by inf.animateFloat(
-        initialValue  = 0f,
-        targetValue   = -5f,
-        animationSpec = infiniteRepeatable(tween(600, easing = EaseInOutSine), RepeatMode.Reverse),
-        label         = "bird"
-    )
-
-    Card(
-        modifier  = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .clickable { onClick() },
-        shape     = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors    = CardDefaults.cardColors(containerColor = Color.Transparent)
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(Color(0xFF1A6B3A), Color(0xFF2E9E56), Color(0xFF1A6B3A))
-                    )
-                )
-                .padding(horizontal = 20.dp, vertical = 14.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier          = Modifier.fillMaxWidth()
-            ) {
-                Text("🐦", fontSize = 32.sp, modifier = Modifier.offset(y = birdBounce.dp))
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Flappy $petName",
-                        fontSize   = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color      = Color.White)
-                    Text("Earn ⭐ bonding points to dress up your pet!",
-                        fontSize = 12.sp,
-                        color    = Color.White.copy(alpha = 0.8f))
-                    if (bestScore > 0) {
-                        Spacer(Modifier.height(2.dp))
-                        Text("⭐ $bestScore bonding points",
-                            fontSize = 11.sp,
-                            color    = Color(0xFFFFD700))
-                    }
-                }
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = glowAlpha))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Play ▶",
-                        fontSize   = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color      = Color(0xFF1A6B3A))
-                }
-            }
-        }
     }
 }
 
@@ -1066,39 +930,104 @@ fun MiniMusicPlayer(
     onNav:      () -> Unit,
     themeState: AppThemeState = AppThemeState()
 ) {
-    val ps = vm?.playerState?.collectAsState()
-    val t  = ps?.value?.currentTrack ?: return
-    val p  = themeState.activePalette
+    val ps        = vm?.playerState?.collectAsState()
+    val state     = ps?.value
+    val t         = state?.currentTrack
+    val p         = themeState.activePalette
+    val isPlaying = state?.isPlaying == true
+    // progress: from playerState (0f–1f). For Spotify tracks fetched at launch
+    // via refreshFromSpotify this will be non-zero; for last-played-offline it
+    // stays at 0, which shows an empty bar — correct UX for "not currently playing".
+    val progress  = state?.progress?.coerceIn(0f, 1f) ?: 0f
+
+    // Poll Spotify every 5 s so the bar always reflects what's actually playing,
+    // including tracks started outside the app.
+    LaunchedEffect(vm) {
+        while (true) {
+            delay(5_000)
+            vm?.refreshFromSpotify()
+        }
+    }
+
     val bg = if (themeState.isDark) p.darkSurface else p.darkTop.copy(alpha = 0.95f)
+
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clickable { onNav() },
         colors    = CardDefaults.cardColors(containerColor = bg),
         shape     = RoundedCornerShape(14.dp),
         elevation = CardDefaults.cardElevation(4.dp)
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Card(Modifier.size(40.dp), shape = RoundedCornerShape(8.dp)) {
-                if (t.albumArtUrl.isNotEmpty())
-                    AsyncImage(t.albumArtUrl, null,
-                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                else Box(Modifier.fillMaxSize().background(p.accent.copy(alpha = 0.5f)),
-                    contentAlignment = Alignment.Center) { Text("🎵", fontSize = 16.sp) }
+        Column {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Album art / placeholder
+                Card(Modifier.size(40.dp), shape = RoundedCornerShape(8.dp)) {
+                    if (t != null && t.albumArtUrl.isNotEmpty())
+                        AsyncImage(t.albumArtUrl, null,
+                            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    else Box(Modifier.fillMaxSize().background(p.accent.copy(alpha = 0.5f)),
+                        contentAlignment = Alignment.Center) { Text("🎵", fontSize = 16.sp) }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    if (t != null) {
+                        // "Now Playing" in Spotify green, "Last Played" dimmed
+                        Text(
+                            text       = if (isPlaying) "Now Playing" else "Last Played",
+                            fontSize   = 9.sp,
+                            fontWeight = FontWeight.Medium,
+                            color      = if (isPlaying) Color(0xFF1DB954)
+                            else Color.White.copy(alpha = 0.45f),
+                            maxLines   = 1
+                        )
+                        Text(t.name,   fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    } else {
+                        Text("No track played yet", fontSize = 13.sp,
+                            color = Color.White.copy(alpha = 0.5f), maxLines = 1)
+                        Text("Tap to open player", fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.35f), maxLines = 1)
+                    }
+                }
+                if (t != null) {
+                    IconButton(onClick = { vm?.togglePlayPause() }) {
+                        Icon(
+                            if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            "PlayPause", tint = Color.White
+                        )
+                    }
+                } else {
+                    IconButton(onClick = onNav) {
+                        Icon(Icons.Filled.MusicNote, "Open Player",
+                            tint = Color.White.copy(alpha = 0.5f))
+                    }
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(t.name,   fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(t.artist, fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            IconButton(onClick = { vm?.togglePlayPause() }) {
-                Icon(
-                    if (ps.value.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    "PlayPause", tint = Color.White
-                )
+
+            // ── Progress bar (always rendered, 0 when paused/offline) ──────
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .padding(horizontal = 4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.15f))
+            ) {
+                if (progress > 0f) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(progress)
+                            .fillMaxHeight()
+                            .background(
+                                if (isPlaying) p.accent
+                                else Color.White.copy(alpha = 0.45f)
+                            )
+                    )
+                }
             }
         }
     }
@@ -1106,24 +1035,36 @@ fun MiniMusicPlayer(
 
 @Composable
 private fun ProfileDrawerContent(
-    displayName:  String,
-    email:        String,
-    isDark:       Boolean = false,
-    onSettings:   () -> Unit,
-    onSpotify:    () -> Unit,
+    displayName:   String,
+    email:         String,
+    isDark:        Boolean = false,
+    themeState:    AppThemeState = AppThemeState(),
+    onSettings:    () -> Unit,
+    onSpotify:     () -> Unit,
     onMoodHistory: () -> Unit,
-    onSignOut:    () -> Unit
+    onSignOut:     () -> Unit
 ) {
-    val bg  = if (isDark) Color(0xFF1C1C2E) else Color.White
-    val tc  = if (isDark) Color(0xFFE8E8F0) else Color(0xFF1A1A2E)
-    val sc  = if (isDark) Color(0xFF888899) else Color(0xFF666677)
-    val av  = if (isDark) Color(0xFF2A2A4A) else Color(0xFF1A1A2E)
-    val div = if (isDark) Color(0xFF2A2A3A) else Color(0xFFEEEEEE)
+    val p   = themeState.activePalette
+    // Dark mode  → darkest shade of the active palette  (darkBottom)
+    // Light mode → lightest shade of the active palette (lightSurface)
+    val bg  = if (isDark) p.darkBottom else p.lightSurface
+    // Avatar chip: one tone up from the drawer bg
+    val av  = if (isDark) p.darkSurface else p.lightBottom
+    val tc  = if (isDark) Color(0xFFE8E8F0)            else Color(0xFF1A1A2E)
+    val sc  = if (isDark) p.darkTextSub                else p.lightTextSub
+    val div = if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.08f)
     ModalDrawerSheet(Modifier.width(300.dp), drawerContainerColor = bg) {
         Column(Modifier.padding(24.dp)) {
             Spacer(Modifier.height(32.dp))
-            Box(Modifier.size(72.dp).clip(CircleShape).background(av),
-                contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    // Light theme: use accent (vivid palette colour) so it pops against the
+                    // pale lightSurface drawer background. Dark theme: darkSurface as before.
+                    .background(if (isDark) av else p.accent),
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(Icons.Filled.Person, null, tint = Color.White, modifier = Modifier.size(36.dp))
             }
             Spacer(Modifier.height(16.dp))

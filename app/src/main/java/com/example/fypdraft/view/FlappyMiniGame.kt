@@ -7,227 +7,68 @@ import kotlinx.coroutines.delay
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  FLAPPY BIRD ENGINE
-//
-//  FIXES APPLIED (v2):
-//
-//  1. JUMP_VELOCITY  raised -0.060 → -0.110  — bird jumps much higher per tap.
-//
-//  2. GRAVITY        lowered 0.010 → 0.006   — slower fall so the player has
-//     time to react between taps.
-//
-//  3. MAX_FALL_SPEED raised 0.035 → 0.040    — tiny nudge to keep physics
-//     consistent but allows full gravity expression.
-//
-//  4. GAP_SIZE       raised 0.34 → 0.46      — wider opening through pipes;
-//     bird diameter is 0.11 of screen so 0.34 was barely 3× the bird.
-//
-//  5. OBSTACLE_WIDTH narrowed 0.12 → 0.09    — thinner pipes = easier to
-//     thread.
-//
-//  6. OBSTACLE_SPEED slowed 0.0055 → 0.0045  — more reaction time.
-//
-//  7. SPAWN_GAP_X    raised 0.58 → 0.72      — more breathing room between
-//     consecutive pipes.
-//
-//  8. FIRST_SPAWN_X  added (1.40f) — very first pipe starts far off-screen so
-//     the player gets a grace period before the first obstacle arrives.
-//
-//  9. tap() on DEAD  now calls restart() instead of returning dead state, so
-//     tapping after death restarts the game automatically.
-//
-// 10. Score-to-BondingPoints conversion added via FlappyRewardCalculator so
-//     the caller (ViewModel / Compose) can award ⭐ bonding points when the
-//     round ends.
+//  FLAPPY BIRD ENGINE  (kept for reference, not shown in UI any more)
 // ══════════════════════════════════════════════════════════════════════════════
 
 object FlappyConstants {
     const val PET_X          = 0.22f
     const val PET_HALF_SIZE  = 0.055f
-
-    // FIX 2: slower gravity — was 0.010f
-    const val GRAVITY        = 0.001f
-    // FIX 1: much stronger jump — was -0.060f
-    const val JUMP_VELOCITY  = -0.110f
-    // FIX 3: slightly higher cap
-    const val MAX_FALL_SPEED = 0.040f
-
-    // FIX 5: thinner pipes — was 0.12f
-    const val OBSTACLE_WIDTH = 0.05f
-    // FIX 4: wider gap — was 0.34f
-    const val GAP_SIZE       = 0.46f
-    // FIX 6: slower scrolling — was 0.0055f
-    const val OBSTACLE_SPEED = 0.0045f
-    // FIX 7: more spacing between pipes — was 0.58f
-    const val SPAWN_GAP_X    = 0.72f
-
-    // FIX 8: first pipe spawns far off-screen for a grace period
-    const val FIRST_SPAWN_X  = 1.40f
-    const val NORMAL_SPAWN_X = 1.05f
-
+    const val GRAVITY        = 0.008f
+    const val JUMP_VELOCITY  = -0.060f
+    const val MAX_FALL_SPEED = 0.035f
+    const val OBSTACLE_WIDTH = 0.12f
+    const val GAP_SIZE       = 0.34f
+    const val OBSTACLE_SPEED = 0.0055f
+    const val SPAWN_GAP_X    = 0.58f
     const val TICK_MS        = 16L
-
-    // Forgiveness inset for collision box (makes hitbox slightly smaller than sprite)
-    const val FORGIVE        = 0.012f
-}
-
-// ── Reward calculator ─────────────────────────────────────────────────────────
-// Call this at game-over to convert score into ⭐ bonding points.
-//   0 pts  → 0 ⭐
-//   1–4    → 2 ⭐ (survived at least one pipe)
-//   5–9    → 5 ⭐
-//   10–19  → 10 ⭐
-//   20–39  → 20 ⭐
-//   40+    → 35 ⭐  (elite round)
-// New-best bonus: +5 ⭐ whenever current score beats the stored bestScore.
-object FlappyRewardCalculator {
-    fun bondingPoints(score: Int, previousBest: Int): Int {
-        val base = when {
-            score == 0  -> 0
-            score < 5   -> 2
-            score < 10  -> 5
-            score < 20  -> 10
-            score < 40  -> 20
-            else        -> 35
-        }
-        val newBestBonus = if (score > previousBest) 5 else 0
-        return base + newBestBonus
-    }
 }
 
 data class FlappyObstacle(val x: Float, val gapTop: Float, val passed: Boolean = false)
 enum class FlappyPhase { IDLE, PLAYING, DEAD }
-
 data class FlappyGameState(
     val phase     : FlappyPhase          = FlappyPhase.IDLE,
     val petY      : Float                = 0.42f,
     val velocityY : Float                = 0f,
     val obstacles : List<FlappyObstacle> = emptyList(),
     val score     : Int                  = 0,
-    val bestScore : Int                  = 0,
-    // Set to true on the tick that triggers DEAD, so the UI can award points once.
-    val pendingReward : Boolean          = false
+    val bestScore : Int                  = 0
 )
 
 object FlappyGameEngine {
-
     fun tap(state: FlappyGameState): FlappyGameState = when (state.phase) {
-        // FIX 9: tap-on-DEAD now auto-restarts instead of doing nothing.
-        FlappyPhase.DEAD -> restart(state.bestScore)
-
-        FlappyPhase.IDLE -> state.copy(
+        FlappyPhase.DEAD -> state
+        else -> state.copy(
             phase     = FlappyPhase.PLAYING,
             velocityY = FlappyConstants.JUMP_VELOCITY,
-            // FIX 8: spawn the first obstacle far away
-            obstacles = listOf(spawnFirstObstacle())
-        )
-
-        FlappyPhase.PLAYING -> state.copy(
-            velocityY = FlappyConstants.JUMP_VELOCITY
+            obstacles = if (state.obstacles.isEmpty()) listOf(spawnObstacle()) else state.obstacles
         )
     }
-
     fun tick(state: FlappyGameState): FlappyGameState {
         if (state.phase != FlappyPhase.PLAYING) return state
-
-        // ── Physics ───────────────────────────────────────────────────────────
-        val newVel = (state.velocityY + FlappyConstants.GRAVITY)
-            .coerceAtMost(FlappyConstants.MAX_FALL_SPEED)
-        val newY = state.petY + newVel
-
-        // Hit ceiling or floor
-        if (newY >= 0.94f || newY <= 0.02f) {
-            val best = maxOf(state.score, state.bestScore)
-            return state.copy(
-                phase         = FlappyPhase.DEAD,
-                petY          = newY.coerceIn(0.02f, 0.94f),
-                velocityY     = 0f,
-                bestScore     = best,
-                pendingReward = true
-            )
-        }
-
-        // ── Obstacle movement + scoring ───────────────────────────────────────
+        val newVel = (state.velocityY + FlappyConstants.GRAVITY).coerceAtMost(FlappyConstants.MAX_FALL_SPEED)
+        val newY   = state.petY + newVel
+        if (newY >= 0.94f || newY <= 0.02f) return state.copy(phase = FlappyPhase.DEAD, petY = newY.coerceIn(0.02f, 0.94f), velocityY = 0f, bestScore = maxOf(state.score, state.bestScore))
         var newScore = state.score
-        val moved = state.obstacles.map { obs ->
-            val nx   = obs.x - FlappyConstants.OBSTACLE_SPEED
+        val moved    = state.obstacles.map { obs ->
+            val nx = obs.x - FlappyConstants.OBSTACLE_SPEED
             val pass = !obs.passed && (nx + FlappyConstants.OBSTACLE_WIDTH) < FlappyConstants.PET_X
             if (pass) newScore++
             obs.copy(x = nx, passed = obs.passed || pass)
         }
         val alive   = moved.filter { it.x + FlappyConstants.OBSTACLE_WIDTH > -0.02f }
-        val withNew = if ((alive.maxOfOrNull { it.x } ?: -1f) < 1f - FlappyConstants.SPAWN_GAP_X)
-            alive + spawnObstacle() else alive
-
-        // ── Collision — inset hitbox (forgiveness) ────────────────────────────
-        val f  = FlappyConstants.FORGIVE
-        val pl = FlappyConstants.PET_X   - FlappyConstants.PET_HALF_SIZE + f
-        val pr = FlappyConstants.PET_X   + FlappyConstants.PET_HALF_SIZE - f
-        val pt = newY - FlappyConstants.PET_HALF_SIZE + f
-        val pb = newY + FlappyConstants.PET_HALF_SIZE - f
-
-        val hit = withNew.any { obs ->
-            val overX = pr > (obs.x + f) && pl < (obs.x + FlappyConstants.OBSTACLE_WIDTH - f)
-            val overY = pt < (obs.gapTop) || pb > (obs.gapTop + FlappyConstants.GAP_SIZE)
-            overX && overY
-        }
-
-        return if (hit) {
-            val best = maxOf(newScore, state.bestScore)
-            state.copy(
-                phase         = FlappyPhase.DEAD,
-                petY          = newY,
-                velocityY     = 0f,
-                obstacles     = withNew,
-                score         = newScore,
-                bestScore     = best,
-                pendingReward = true
-            )
-        } else {
-            state.copy(
-                petY      = newY,
-                velocityY = newVel,
-                obstacles = withNew,
-                score     = newScore,
-                pendingReward = false
-            )
-        }
+        val withNew = if ((alive.maxOfOrNull { it.x } ?: -1f) < 1f - FlappyConstants.SPAWN_GAP_X) alive + spawnObstacle() else alive
+        val pl = FlappyConstants.PET_X - FlappyConstants.PET_HALF_SIZE; val pr = FlappyConstants.PET_X + FlappyConstants.PET_HALF_SIZE
+        val pt = newY - FlappyConstants.PET_HALF_SIZE; val pb = newY + FlappyConstants.PET_HALF_SIZE
+        val hit = withNew.any { obs -> val overX = pr > obs.x && pl < obs.x + FlappyConstants.OBSTACLE_WIDTH; overX && (pt < obs.gapTop || pb > obs.gapTop + FlappyConstants.GAP_SIZE) }
+        return if (hit) state.copy(phase = FlappyPhase.DEAD, petY = newY, velocityY = 0f, obstacles = withNew, score = newScore, bestScore = maxOf(newScore, state.bestScore))
+        else state.copy(petY = newY, velocityY = newVel, obstacles = withNew, score = newScore)
     }
-
-    /** Call after the UI has consumed the reward so it doesn't double-award. */
-    fun clearReward(state: FlappyGameState) = state.copy(pendingReward = false)
-
     fun restart(bestScore: Int) = FlappyGameState(bestScore = bestScore)
-
-    // FIX 8: first obstacle spawns further right
-    private fun spawnFirstObstacle() = FlappyObstacle(
-        x      = FlappyConstants.FIRST_SPAWN_X,
-        gapTop = safeGapTop()
-    )
-
-    private fun spawnObstacle() = FlappyObstacle(
-        x      = FlappyConstants.NORMAL_SPAWN_X,
-        gapTop = safeGapTop()
-    )
-
-    // Keep gap top in a safe range so the opening is never clipped by ceiling/floor.
-    //   gap must not start above 0.08 or end below 0.88
-    //   gapTop range: [0.08, 0.88 - GAP_SIZE]
-    private fun safeGapTop(): Float {
-        val minTop = 0.08f
-        val maxTop = 0.88f - FlappyConstants.GAP_SIZE   // 0.88 - 0.46 = 0.42
-        return minTop + Math.random().toFloat() * (maxTop - minTop)
-    }
+    private fun spawnObstacle() = FlappyObstacle(x = 1.05f, gapTop = 0.10f + (Math.random().toFloat() * 0.46f))
 }
 
-suspend fun runFlappyGameLoop(
-    getState: () -> FlappyGameState,
-    onStateUpdate: (FlappyGameState) -> Unit
-) {
-    while (getState().phase == FlappyPhase.PLAYING) {
-        delay(FlappyConstants.TICK_MS)
-        onStateUpdate(FlappyGameEngine.tick(getState()))
-    }
+suspend fun runFlappyGameLoop(getState: () -> FlappyGameState, onStateUpdate: (FlappyGameState) -> Unit) {
+    while (getState().phase == FlappyPhase.PLAYING) { delay(FlappyConstants.TICK_MS); onStateUpdate(FlappyGameEngine.tick(getState())) }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -319,15 +160,16 @@ data class Cactus(
 enum class DinoPhase { IDLE, PLAYING, DEAD }
 
 data class DinoGameState(
-    val phase      : DinoPhase    = DinoPhase.IDLE,
+    val phase           : DinoPhase    = DinoPhase.IDLE,
     // dinoY = Y coordinate of avatar TOP edge
-    val dinoY      : Float        = DinoConstants.GROUND_Y - DinoConstants.DINO_H,
-    val velocityY  : Float        = 0f,
-    val isOnGround : Boolean      = true,
-    val cacti      : List<Cactus> = emptyList(),
-    val score      : Int          = 0,
-    val bestScore  : Int          = 0,
-    val legFrame   : Int          = 0
+    val dinoY           : Float        = DinoConstants.GROUND_Y - DinoConstants.DINO_H,
+    val velocityY       : Float        = 0f,
+    val isOnGround      : Boolean      = true,
+    val hasDoubleJumped : Boolean      = false,   // double-jump consumed mid-air
+    val cacti           : List<Cactus> = emptyList(),
+    val score           : Int          = 0,
+    val bestScore       : Int          = 0,
+    val legFrame        : Int          = 0
 ) {
     /** Y coordinate of avatar BOTTOM edge. */
     val avatarBottom get() = dinoY + DinoConstants.DINO_H
@@ -341,15 +183,22 @@ object DinoGameEngine {
     fun tap(state: DinoGameState): DinoGameState = when (state.phase) {
         DinoPhase.DEAD -> state
         DinoPhase.IDLE,
-        DinoPhase.PLAYING -> {
-            if (!state.isOnGround) state   // no double-jump
-            else state.copy(
-                phase      = DinoPhase.PLAYING,
-                velocityY  = DinoConstants.JUMP_VELOCITY,
-                isOnGround = false,
-                // FIX 4: first cactus spawns further away so player has reaction time
-                cacti      = if (state.cacti.isEmpty()) listOf(spawnFirstCactus()) else state.cacti
+        DinoPhase.PLAYING -> when {
+            // First jump — on ground
+            state.isOnGround -> state.copy(
+                phase           = DinoPhase.PLAYING,
+                velocityY       = DinoConstants.JUMP_VELOCITY,
+                isOnGround      = false,
+                hasDoubleJumped = false,
+                cacti           = if (state.cacti.isEmpty()) listOf(spawnFirstCactus()) else state.cacti
             )
+            // Double jump — mid-air, not yet used
+            !state.hasDoubleJumped -> state.copy(
+                velocityY       = DinoConstants.JUMP_VELOCITY * 0.85f,  // slightly weaker 2nd jump
+                hasDoubleJumped = true
+            )
+            // Already used double jump — ignore tap
+            else -> state
         }
     }
 
@@ -412,12 +261,13 @@ object DinoGameEngine {
             score     = newScore,
             bestScore = maxOf(newScore, state.bestScore)
         ) else state.copy(
-            dinoY      = newDinoY,
-            velocityY  = if (landed) 0f else newVel,
-            isOnGround = landed,
-            cacti      = withNew,
-            score      = newScore,
-            legFrame   = newLeg
+            dinoY           = newDinoY,
+            velocityY       = if (landed) 0f else newVel,
+            isOnGround      = landed,
+            hasDoubleJumped = if (landed) false else state.hasDoubleJumped,  // reset on landing
+            cacti           = withNew,
+            score           = newScore,
+            legFrame        = newLeg
         )
     }
 

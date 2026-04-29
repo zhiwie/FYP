@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.SharedPreferences
 import android.media.MediaPlayer
 import android.os.IBinder
 import android.util.Log
@@ -82,6 +83,52 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
+
+    // ── Last-track persistence (SharedPreferences) ───────────────────
+
+    private val prefs: SharedPreferences =
+        application.getSharedPreferences("music_player_prefs", Context.MODE_PRIVATE)
+
+    /** Persist track so the mini-player can show it next app launch. */
+    private fun saveLastTrack(track: Track) {
+        prefs.edit()
+            .putString("last_track_id",          track.id)
+            .putString("last_track_name",         track.name)
+            .putString("last_track_artist",       track.artist)
+            .putString("last_track_album",        track.album)
+            .putString("last_track_art_url",      track.albumArtUrl)
+            .putString("last_track_spotify_uri",  track.spotifyUri ?: "")
+            .putLong  ("last_track_duration_ms",  track.durationMs)
+            .apply()
+    }
+
+    /** Restore the last played track from SharedPreferences, if any. */
+    private fun restoreLastTrack(): Track? {
+        val name = prefs.getString("last_track_name", null) ?: return null
+        val id   = prefs.getString("last_track_id",   null) ?: return null
+        return Track(
+            id          = id,
+            name        = name,
+            artist      = prefs.getString("last_track_artist",      "") ?: "",
+            album       = prefs.getString("last_track_album",       "") ?: "",
+            albumArtUrl = prefs.getString("last_track_art_url",     "") ?: "",
+            previewUrl  = null,
+            durationMs  = prefs.getLong  ("last_track_duration_ms",  0L),
+            spotifyUri  = prefs.getString("last_track_spotify_uri", "")
+                .takeIf { !it.isNullOrBlank() }
+        )
+    }
+
+    init {
+        // Restore last played track so the mini-player is never empty
+        restoreLastTrack()?.let { last ->
+            _playerState.value = _playerState.value.copy(
+                currentTrack = last,
+                isPlaying    = false
+            )
+            Log.d(TAG, "Restored last track: '${last.name}' by ${last.artist}")
+        }
+    }
 
     // ── Service binding ──────────────────────────────────────────────
 
@@ -163,6 +210,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
      * yet) a background Deezer fetch resolves the mood within ~200 ms.
      */
     fun loadTrack(track: Track, playlist: List<Track> = listOf(track)) {
+        saveLastTrack(track)   // persist so mini-player always shows the last song
         val index = playlist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
         _playerState.value = _playerState.value.copy(
             currentTrack     = track,
@@ -494,6 +542,46 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             isPlaying   = isPlaying,
             albumArtUrl = track.albumArtUrl.takeIf { it.isNotBlank() }
         )
+    }
+    /**
+     * Polls Spotify's current player state and syncs it into [playerState].
+     * Called periodically by MiniMusicPlayer (every 5s) so the bar always
+     * shows the real currently-playing track, not just what the app loaded.
+     *
+     * Safe to call even when not connected — SpotifyPlaybackManager guards it.
+     */
+    fun refreshFromSpotify() {
+        spotifyPlaybackManager?.getPlayerInfo { spotifyState ->
+            val currentUri  = _playerState.value.currentTrack?.spotifyUri
+            val incomingUri = "spotify:track:${spotifyState.trackUri.substringAfterLast(":")}"
+
+            // Only update if the track actually changed — avoids unnecessary recomposition
+            if (spotifyState.trackUri.isNotBlank() && spotifyState.trackUri != currentUri) {
+                // Build a Track from the Spotify state
+                val updatedTrack = com.example.fypdraft.model.Track(
+                    id           = spotifyState.trackUri.substringAfterLast(":"),
+                    name         = spotifyState.trackName,
+                    artist       = spotifyState.artistName,
+                    album        = spotifyState.albumName,
+                    albumArtUrl  = "", // album art resolved separately via AppRemote image API
+                    previewUrl   = null,
+                    durationMs   = spotifyState.durationMs,
+                    spotifyUri   = spotifyState.trackUri
+                )
+                _playerState.value = _playerState.value.copy(
+                    currentTrack = updatedTrack,
+                    isPlaying    = !spotifyState.isPaused,
+                    duration     = spotifyState.durationMs,
+                    currentPosition = spotifyState.positionMs
+                )
+            } else {
+                // Same track — just sync play state + position
+                _playerState.value = _playerState.value.copy(
+                    isPlaying       = !spotifyState.isPaused,
+                    currentPosition = spotifyState.positionMs
+                )
+            }
+        }
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────

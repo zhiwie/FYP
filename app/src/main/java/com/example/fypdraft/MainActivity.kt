@@ -55,7 +55,6 @@ object Screen {
     const val PET_SHOP      = "petshop"
     const val THEME         = "theme"
     const val MOOD_HISTORY  = "mood_history"
-    const val FLAPPY_GAME   = "flappy_game"          // ← NEW
 
     fun tabIndex(screen: String): Int = when (screen) {
         HOME -> 0; SEARCH -> 1; FRIENDS -> 2; LIBRARY -> 3; else -> -1
@@ -213,7 +212,6 @@ fun MoodSyncApp(
         currentScreen in listOf(
             Screen.WELCOME, Screen.LOGIN, Screen.SIGNUP,
             Screen.NICKNAME, Screen.CONNECT_MUSIC, Screen.RESET,
-            Screen.FLAPPY_GAME                              // ← hide pet widget during game
         ) -> false
         !floatingMascotEnabled                              -> false
         currentScreen == Screen.HOME                       -> !isMascotWidgetVisible
@@ -279,7 +277,6 @@ fun MoodSyncApp(
                 onNavigateToMusicPlayer   = { navigateTo(Screen.MUSIC_PLAYER) },
                 onNavigateToEmotionChat   = { navigateTo(Screen.EMOTION_CHAT) },
                 onNavigateToMoodHistory   = { navigateTo(Screen.MOOD_HISTORY) },
-                onNavigateToFlappyGame    = { navigateTo(Screen.FLAPPY_GAME) },   // ← NEW
                 onSignOut                 = { handleSignOut() },
                 onMascotVisibilityChanged = { visible -> isMascotWidgetVisible = visible },
                 currentTab                = 0
@@ -365,13 +362,6 @@ fun MoodSyncApp(
                     onBack     = { navigateBack() }
                 )
             }
-
-            // ── NEW: Flappy mini-game ─────────────────────────────────────
-            Screen.FLAPPY_GAME -> FlappyGameScreen(
-                petState      = petState,
-                petRepository = petRepository,
-                onBack        = { navigateBack() }
-            )
         }
 
         // ── Floating pet: tap opens the Customise buddy sheet ─────────────

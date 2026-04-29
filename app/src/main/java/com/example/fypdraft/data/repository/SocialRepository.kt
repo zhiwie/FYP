@@ -708,6 +708,136 @@ class SocialRepository {
         } catch (e: Exception) { Log.e(TAG, "getMessages", e); emptyList() }
     }
 
+    // ── Real-time: my own moment ─────────────────────────────────────
+
+    /**
+     * Live snapshot on the current user's moment document.
+     * Fires immediately on attach and on every remote write.
+     */
+    fun listenToMyMoment(
+        onUpdate: (MusicMoment?) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration {
+        val me = uid() ?: run {
+            onUpdate(null)
+            return object : com.google.firebase.firestore.ListenerRegistration { override fun remove() {} }
+        }
+        return db.collection("moments").document(me)
+            .addSnapshotListener { snap, error ->
+                if (error != null) { Log.e(TAG, "listenToMyMoment", error); return@addSnapshotListener }
+                if (snap == null || !snap.exists()) { onUpdate(null); return@addSnapshotListener }
+                onUpdate(docToMoment(snap.id, snap.data ?: emptyMap()))
+            }
+    }
+
+    // ── Real-time: full friends list + their moments ──────────────────
+
+    /**
+     * Attaches a single snapshot listener to the friends subcollection.
+     * Whenever the list of friend UIDs changes (add / remove), it re-fetches
+     * all friend profiles + moments and fires [onUpdate].
+     *
+     * Additionally, this helper keeps per-friend moment listeners alive so
+     * any friend changing their "now playing" is reflected immediately.
+     *
+     * Returns a single [ListenerRegistration] that, when removed, cleans up
+     * both the friends-list listener and all per-friend moment listeners.
+     */
+    fun listenToFriendsRealTime(
+        onUpdate: (List<FriendProfile>) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration {
+        val me = uid() ?: run {
+            onUpdate(emptyList())
+            return object : com.google.firebase.firestore.ListenerRegistration { override fun remove() {} }
+        }
+
+        // Per-friend moment listeners keyed by UID; replaced whenever the friends list changes
+        val momentListeners = mutableMapOf<String, com.google.firebase.firestore.ListenerRegistration>()
+        // Latest known moment per friend — updated independently by moment listeners
+        val latestMoments   = mutableMapOf<String, MusicMoment?>()
+        // Latest known profiles (without moment) — set on friends-list change
+        val baseProfiles    = mutableMapOf<String, FriendProfile>()
+
+        fun emitCurrent() {
+            val profiles = baseProfiles.values.map { fp ->
+                val moment     = latestMoments[fp.uid]
+                val lastActive = moment?.timestamp ?: fp.lastActive
+                fp.copy(
+                    currentMoment = moment,
+                    isOnline      = (System.currentTimeMillis() - lastActive) < 15 * 60_000,
+                    lastActive    = lastActive
+                )
+            }.sortedWith(
+                compareByDescending<FriendProfile> { it.isOnline }
+                    .thenByDescending { it.lastActive }
+            )
+            onUpdate(profiles)
+        }
+
+        // Attach a moment listener for a single friend
+        fun attachMomentListener(fuid: String) {
+            momentListeners[fuid]?.remove()   // cancel any previous listener for this uid
+            momentListeners[fuid] = db.collection("moments").document(fuid)
+                .addSnapshotListener { snap, error ->
+                    if (error != null) return@addSnapshotListener
+                    latestMoments[fuid] = if (snap != null && snap.exists())
+                        docToMoment(snap.id, snap.data ?: emptyMap()) else null
+                    emitCurrent()
+                }
+        }
+
+        // Watch the friends subcollection for membership changes
+        val friendsListListener = db.collection("users").document(me)
+            .collection("friends")
+            .addSnapshotListener { snap, error ->
+                if (error != null) { Log.e(TAG, "listenToFriendsRealTime:list", error); return@addSnapshotListener }
+                if (snap == null) return@addSnapshotListener
+
+                val newUids = snap.documents.map { doc ->
+                    doc.getString("uid")?.takeIf { it.isNotBlank() } ?: doc.id
+                }.filter { it.isNotBlank() }.distinct()
+
+                // Remove moment listeners for friends no longer in the list
+                val removedUids = momentListeners.keys - newUids.toSet()
+                removedUids.forEach { uid ->
+                    momentListeners.remove(uid)?.remove()
+                    latestMoments.remove(uid)
+                    baseProfiles.remove(uid)
+                }
+
+                // Fetch profile + attach moment listener for each friend
+                newUids.forEach { fuid ->
+                    db.collection("users").document(fuid).get()
+                        .addOnSuccessListener { userDoc ->
+                            val name   = userDoc.getString("displayName")
+                                ?: userDoc.getString("username") ?: "Unknown"
+                            val mascot = userDoc.getString("mascotType") ?: "CAT"
+                            baseProfiles[fuid] = FriendProfile(
+                                uid         = fuid,
+                                displayName = name,
+                                mascotType  = mascot
+                            )
+                            if (!momentListeners.containsKey(fuid)) {
+                                attachMomentListener(fuid)
+                            }
+                            emitCurrent()
+                        }
+                        .addOnFailureListener { e -> Log.e(TAG, "listenToFriendsRealTime:profile $fuid", e) }
+                }
+
+                // If all friends were removed, emit empty list immediately
+                if (newUids.isEmpty()) onUpdate(emptyList())
+            }
+
+        // Return a composite registration that tears everything down
+        return object : com.google.firebase.firestore.ListenerRegistration {
+            override fun remove() {
+                friendsListListener.remove()
+                momentListeners.values.forEach { it.remove() }
+                momentListeners.clear()
+            }
+        }
+    }
+
     // ── Mascot type sync ──────────────────────────────────────────────
 
     suspend fun updateMyMascotType(mascotType: String) {

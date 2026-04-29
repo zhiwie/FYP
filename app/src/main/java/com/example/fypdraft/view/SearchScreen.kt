@@ -201,11 +201,14 @@ fun SearchScreen(
     Scaffold(
         containerColor = Color.Transparent,
         bottomBar = {
-            BottomNavBar(
-                currentTab, onHome = onNavigateToHome, onSearch = {},
-                onFriends = onNavigateToFriends, onLibrary = onNavigateToLibrary,
-                themeState = themeState
-            )
+            Column {
+                MiniMusicPlayer(vm = musicPlayerViewModel, onNav = onNavigateToMusicPlayer, themeState = themeState)
+                BottomNavBar(
+                    currentTab, onHome = onNavigateToHome, onSearch = {},
+                    onFriends = onNavigateToFriends, onLibrary = onNavigateToLibrary,
+                    themeState = themeState
+                )
+            }
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().background(animatedMoodBrushLight(themeState)).padding(padding)) {

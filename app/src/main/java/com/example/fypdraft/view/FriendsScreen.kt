@@ -66,6 +66,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -155,16 +156,36 @@ fun FriendsScreen(
     var vibeHistoryFriend   by remember { mutableStateOf<FriendProfile?>(null) }
     var friendToRemove      by remember { mutableStateOf<FriendProfile?>(null) }
 
-    suspend fun refreshAll() {
-        friends      = socialRepo.getFriendsWithProfiles()
-        myMoment     = socialRepo.getMyMoment()
-        activityFeed = buildActivityFeed(friends, myMoment)
+    // ── Real-time Firestore listeners ─────────────────────────────────────
+    // Friends list + their moments: updates instantly when any friend changes
+    // what they're playing, or when friends are added/removed.
+    DisposableEffect(myUid) {
+        if (myUid.isEmpty()) {
+            isLoading = false
+            return@DisposableEffect onDispose {}
+        }
+
+        val friendsListener = socialRepo.listenToFriendsRealTime { updatedFriends ->
+            friends      = updatedFriends
+            activityFeed = buildActivityFeed(updatedFriends, myMoment)
+            isLoading    = false
+        }
+
+        val myMomentListener = socialRepo.listenToMyMoment { updatedMoment ->
+            myMoment     = updatedMoment
+            activityFeed = buildActivityFeed(friends, updatedMoment)
+        }
+
+        onDispose {
+            friendsListener.remove()
+            myMomentListener.remove()
+        }
     }
 
+    // Fallback: if listeners haven't fired within 8 s, stop the spinner anyway
     LaunchedEffect(Unit) {
-        isLoading = true
-        try { refreshAll() } catch (e: Exception) { Log.e("FriendsScreen", "Load failed", e) }
-        isLoading = false
+        kotlinx.coroutines.delay(8_000)
+        if (isLoading) isLoading = false
     }
 
     val playerState  = musicPlayerViewModel?.playerState?.collectAsState()
@@ -187,7 +208,10 @@ fun FriendsScreen(
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             bottomBar = {
-                BottomNavBar(currentTab, onNavigateToHome, onNavigateToSearch, {}, onNavigateToLibrary, themeState = themeState)
+                Column {
+                    MiniMusicPlayer(vm = musicPlayerViewModel, onNav = onNavigateToMusicPlayer, themeState = themeState)
+                    BottomNavBar(currentTab, onNavigateToHome, onNavigateToSearch, {}, onNavigateToLibrary, themeState = themeState)
+                }
             },
             floatingActionButton = {
                 if (currentTrack != null) {
@@ -268,9 +292,8 @@ fun FriendsScreen(
                                     moment = moment, isOwn = false, primaryText = primaryText, isDark = isDark,
                                     onReact = { emoji ->
                                         scope.launch {
+                                            // Write reaction; real-time listener auto-refreshes UI
                                             socialRepo.reactToMoment(f.uid, emoji)
-                                            friends      = socialRepo.getFriendsWithProfiles()
-                                            activityFeed = buildActivityFeed(friends, myMoment)
                                         }
                                     },
                                     onPlay = { musicPlayerViewModel?.playFromRecommendation(moment.trackTitle, moment.trackArtist) { _, _ -> } },
@@ -318,7 +341,7 @@ fun FriendsScreen(
                         val doc   = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
                         val uname = doc.getString("username")
                         if (uname != null) {
-                            socialRepo.addFriend(uname).fold(onSuccess = { refreshAll() }, onFailure = { addError = it.message; showAddDialog = true })
+                            socialRepo.addFriend(uname).fold(onSuccess = { /* listener auto-refreshes */ }, onFailure = { addError = it.message; showAddDialog = true })
                         } else { addError = "User not found for this QR code"; showAddDialog = true }
                     }
                 },
@@ -348,7 +371,8 @@ fun FriendsScreen(
             onPost = { title, artist, albumArt, spotifyUri, caption, mood ->
                 scope.launch {
                     socialRepo.postVibeCheck(title, artist, albumArt, spotifyUri, mood, caption, myMascotType)
-                    myMoment = socialRepo.getMyMoment(); activityFeed = buildActivityFeed(friends, myMoment); showVibeCheckDialog = false
+                    // myMoment listener auto-updates after the write
+                    showVibeCheckDialog = false
                 }
             })
     }
@@ -361,12 +385,12 @@ fun FriendsScreen(
             onDismiss  = { showAddDialog = false; addError = null },
             onScanQr   = { showAddDialog = false; showQrScanner = true },
             onShowMyQr = { showAddDialog = false; showQrDialog = true },
-            onAdd      = { username -> scope.launch { socialRepo.addFriend(username).fold(onSuccess = { showAddDialog = false; addError = null; refreshAll() }, onFailure = { addError = it.message }) } },
+            onAdd      = { username -> scope.launch { socialRepo.addFriend(username).fold(onSuccess = { showAddDialog = false; addError = null }, onFailure = { addError = it.message }) } },
             onAddByUid = { uid ->
                 scope.launch {
                     val doc   = com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
                     val uname = doc.getString("username") ?: return@launch
-                    socialRepo.addFriend(uname).fold(onSuccess = { showAddDialog = false; addError = null; refreshAll() }, onFailure = { addError = it.message })
+                    socialRepo.addFriend(uname).fold(onSuccess = { showAddDialog = false; addError = null }, onFailure = { addError = it.message })
                 }
             }
         )
@@ -379,8 +403,20 @@ fun FriendsScreen(
             title = { Text("Remove Friend", fontWeight = FontWeight.Bold) },
             text  = { Text("Remove ${removingFriend.displayName} from your friends? They won't be notified.") },
             confirmButton = {
-                Button(onClick = { scope.launch { socialRepo.removeFriend(removingFriend.uid).fold(onSuccess = { friendToRemove = null; refreshAll() }, onFailure = { friendToRemove = null }) } },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Remove") }
+                Button(onClick = {
+                    val removedUid = removingFriend.uid
+                    scope.launch {
+                        socialRepo.removeFriend(removedUid).fold(
+                            onSuccess = {
+                                // Optimistic removal so UI is instant; real-time listener confirms
+                                friends      = friends.filter { it.uid != removedUid }
+                                activityFeed = buildActivityFeed(friends, myMoment)
+                                friendToRemove = null
+                            },
+                            onFailure = { friendToRemove = null }
+                        )
+                    }
+                }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Remove") }
             },
             dismissButton = { TextButton(onClick = { friendToRemove = null }) { Text("Cancel") } }
         )
