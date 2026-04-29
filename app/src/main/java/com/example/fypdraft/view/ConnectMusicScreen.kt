@@ -2,7 +2,6 @@ package com.example.fypdraft.view
 
 import android.app.Activity
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,11 +15,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
 import com.example.fypdraft.viewmodel.SpotifyViewModel
 
-private val DarkNavy = Color(0xFF1A1A2E)
+private val DarkNavy     = Color(0xFF1A1A2E)
 private val SpotifyGreen = Color(0xFF1DB954)
-private val YouTubeRed = Color(0xFFFF0000)
 
 @Composable
 fun ConnectMusicScreen(
@@ -34,8 +33,6 @@ fun ConnectMusicScreen(
     LaunchedEffect(authState.isAuthenticated) {
         if (authState.isAuthenticated) onConnected()
     }
-
-    var selectedPlatform by remember { mutableStateOf<String?>(null) }
 
     Box(
         modifier = Modifier
@@ -80,24 +77,16 @@ fun ConnectMusicScreen(
 
             Spacer(Modifier.height(56.dp))
 
-            // Platform icons
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                horizontalArrangement = Arrangement.Center
             ) {
-                // Spotify
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { selectedPlatform = "spotify" }
-                ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
                         modifier = Modifier
                             .size(80.dp)
                             .clip(CircleShape)
-                            .background(
-                                if (selectedPlatform == "spotify") SpotifyGreen.copy(alpha = 0.15f)
-                                else Color.Transparent
-                            ),
+                            .background(SpotifyGreen.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Box(
@@ -112,71 +101,27 @@ fun ConnectMusicScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("Spotify", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
-                }
-
-                // YouTube Music
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clickable { selectedPlatform = "youtube" }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (selectedPlatform == "youtube") YouTubeRed.copy(alpha = 0.15f)
-                                else Color.Transparent
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(CircleShape)
-                                .background(YouTubeRed.copy(alpha = 0.1f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(YouTubeRed),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("\u25B6", fontSize = 20.sp, color = Color.White)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text("YouTube Music", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
+                    Text("+ Deezer previews", fontSize = 12.sp, color = Color.Gray)
                 }
             }
 
             Spacer(Modifier.weight(1f))
 
-            // Connect button
             Button(
-                onClick = {
-                    when (selectedPlatform) {
-                        "spotify" -> spotifyViewModel.connectSpotify(context as Activity)
-                        "youtube" -> onConnected()
-                        else -> { }
-                    }
-                },
+                onClick = { spotifyViewModel.connectSpotify(context as Activity) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
                 shape = RoundedCornerShape(28.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = DarkNavy,
-                    contentColor = Color.White
-                ),
-                enabled = selectedPlatform != null
+                    contentColor   = Color.White
+                )
             ) {
                 if (authState.isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.White)
                 } else {
-                    Text("Connect", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("Connect Spotify", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
             }
 

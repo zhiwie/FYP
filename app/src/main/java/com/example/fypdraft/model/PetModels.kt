@@ -500,7 +500,19 @@ class PetRepository {
         _petState.value = updated
         saveFullState(updated)
     }
+// ── Game rewards ─────────────────────────────────────────────────
 
+    /**
+     * Awards bonding points earned from the Flappy mini-game.
+     * Uses saveMerge (not saveFullState) so it's a lightweight update.
+     */
+    fun addBondingPointsFromGame(points: Int) {
+        if (points <= 0) return
+        val cur     = _petState.value
+        val updated = cur.copy(bondingPoints = cur.bondingPoints + points)
+        _petState.value = updated
+        saveMerge(mapOf("bondingPoints" to updated.bondingPoints))
+    }
     // ── Serialization helper ─────────────────────────────────────────
 
     private fun stateToMap(s: PetState): Map<String, Any?> = mapOf(

@@ -12,10 +12,7 @@ object AppConfig {
     const val OPENAI_BASE_URL = "https://api.openai.com/"
     val OPENAI_API_KEY: String get() = BuildConfig.OPENAI_API_KEY
 
-    // ── YouTube ────────────────────────────────────────────
-    val YOUTUBE_API_KEY: String get() = BuildConfig.YOUTUBE_API_KEY
-
-    // ── Deezer (no auth needed) ────────────────────────────
+    // ── Deezer (no auth needed — public API) ──────────────────────────
     const val DEEZER_BASE_URL = "https://api.deezer.com/"
 
     // ── Spotify ────────────────────────────────────────────
@@ -33,7 +30,7 @@ object AppConfig {
         
         When the user describes their mood or feelings:
         1. Acknowledge their mood warmly in 1-2 sentences.
-        2. Recommend exactly 3-5 songs that match their mood.
+        2. Recommend exactly 6 songs or above that match their mood.
         3. Use EXACTLY this format for each song:
         
         🎵 SONG: Artist Name - Song Title

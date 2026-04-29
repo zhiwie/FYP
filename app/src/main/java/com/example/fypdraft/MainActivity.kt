@@ -55,6 +55,7 @@ object Screen {
     const val PET_SHOP      = "petshop"
     const val THEME         = "theme"
     const val MOOD_HISTORY  = "mood_history"
+    const val FLAPPY_GAME   = "flappy_game"          // ← NEW
 
     fun tabIndex(screen: String): Int = when (screen) {
         HOME -> 0; SEARCH -> 1; FRIENDS -> 2; LIBRARY -> 3; else -> -1
@@ -167,8 +168,6 @@ fun MoodSyncApp(
     LaunchedEffect(Unit) { petRepository.loadPet() }
 
     // ── MOOD PERSISTENCE — lifted here so it survives all navigation ──────────
-    // rememberSaveable at the root survives back-stack changes, screen switches,
-    // and activity recreation. HomeScreen reads and writes this via its params.
     var savedMoodKey by rememberSaveable { mutableStateOf<String?>(null) }
 
     val startScreen = remember {
@@ -199,9 +198,7 @@ fun MoodSyncApp(
     val currentTrackId = playerState.currentTrack?.id
     LaunchedEffect(currentTrackId) { if (currentTrackId != null) petRepository.addXP(10) }
 
-    // ── Floating mascot user preference ──────────────────────────────────
-    // Seeded from the "mascot_visible" SharedPreferences key that SettingsScreen writes.
-    // Using mutableStateOf so toggling in Settings takes effect immediately.
+    // ── Floating mascot user preference ──────────────────────────────────────
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var floatingMascotEnabled by remember {
         mutableStateOf(
@@ -210,23 +207,24 @@ fun MoodSyncApp(
         )
     }
 
-    // ── Floating pet visibility ───────────────────────────────────────────
+    // ── Floating pet visibility ───────────────────────────────────────────────
     var isMascotWidgetVisible by remember { mutableStateOf(true) }
     val showFloatingPet = when {
         currentScreen in listOf(
             Screen.WELCOME, Screen.LOGIN, Screen.SIGNUP,
-            Screen.NICKNAME, Screen.CONNECT_MUSIC, Screen.RESET
+            Screen.NICKNAME, Screen.CONNECT_MUSIC, Screen.RESET,
+            Screen.FLAPPY_GAME                              // ← hide pet widget during game
         ) -> false
-        !floatingMascotEnabled                          -> false
-        currentScreen == Screen.HOME                    -> !isMascotWidgetVisible
-        else                                            -> true
+        !floatingMascotEnabled                              -> false
+        currentScreen == Screen.HOME                       -> !isMascotWidgetVisible
+        else                                               -> true
     }
 
-    // ── Sign-out helper ───────────────────────────────────────────────────
+    // ── Sign-out helper ───────────────────────────────────────────────────────
     fun handleSignOut() {
         chatGPTViewModel.clearConversation()
         authViewModel.signOut()
-        savedMoodKey = null          // clear persisted mood on sign-out
+        savedMoodKey = null
         replaceStack(Screen.WELCOME)
     }
 
@@ -271,9 +269,7 @@ fun MoodSyncApp(
                 petRepository             = petRepository,
                 themeState                = themeState,
                 isPlayingMusic            = isPlaying,
-                // Pass the root-level savedMoodKey down so HomeScreen can read it
                 savedMoodKey              = savedMoodKey,
-                // HomeScreen calls this whenever the user picks a new mood
                 onMoodSelected            = { key -> savedMoodKey = key },
                 onNavigateToSearch        = { bottomNav(Screen.SEARCH) },
                 onNavigateToFriends       = { bottomNav(Screen.FRIENDS) },
@@ -283,6 +279,7 @@ fun MoodSyncApp(
                 onNavigateToMusicPlayer   = { navigateTo(Screen.MUSIC_PLAYER) },
                 onNavigateToEmotionChat   = { navigateTo(Screen.EMOTION_CHAT) },
                 onNavigateToMoodHistory   = { navigateTo(Screen.MOOD_HISTORY) },
+                onNavigateToFlappyGame    = { navigateTo(Screen.FLAPPY_GAME) },   // ← NEW
                 onSignOut                 = { handleSignOut() },
                 onMascotVisibilityChanged = { visible -> isMascotWidgetVisible = visible },
                 currentTab                = 0
@@ -368,6 +365,13 @@ fun MoodSyncApp(
                     onBack     = { navigateBack() }
                 )
             }
+
+            // ── NEW: Flappy mini-game ─────────────────────────────────────
+            Screen.FLAPPY_GAME -> FlappyGameScreen(
+                petState      = petState,
+                petRepository = petRepository,
+                onBack        = { navigateBack() }
+            )
         }
 
         // ── Floating pet: tap opens the Customise buddy sheet ─────────────

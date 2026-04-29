@@ -1,6 +1,7 @@
 package com.example.fypdraft.ml
 
 import android.content.Context
+import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
@@ -8,306 +9,361 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.*
 
 /**
- * SIMPLIFIED AudioPreprocessor - Works without external libraries
+ * AudioPreprocessor — produces a real mel-spectrogram via:
+ *   1. MediaExtractor + MediaCodec  →  decoded 16-bit PCM
+ *   2. Resampling to 22 050 Hz
+ *   3. STFT (Hann window, 2048-point FFT, 512-sample hop)
+ *   4. Mel filterbank (128 bands, 0–11 025 Hz)
+ *   5. Log compression + global min-max normalisation → [0, 1]
  *
- * NOTE: This is a simplified version for testing. For production-quality
- * emotion detection, implement proper STFT + mel filtering or use TarsosDSP.
- *
- * This version:
- * - Extracts basic audio features
- * - Generates mel-spectrogram-like features
- * - Has robust error handling
- * - Works without external dependencies
+ * Output shape: [128 mel bins × 1292 time frames]  (matches TFLite model input)
  */
 class AudioPreprocessor(private val context: Context) {
 
     companion object {
-        private const val TAG = "AudioPreprocessor"
-        private const val SAMPLE_RATE = 22050
-        private const val N_MELS = 128
-        private const val TARGET_FRAMES = 1292
-        private const val MAX_DURATION_SECONDS = 30
+        private const val TAG            = "AudioPreprocessor"
+        private const val TARGET_SR      = 22050          // Hz the model was trained at
+        private const val N_FFT          = 2048           // FFT window length (samples)
+        private const val HOP_LENGTH     = 512            // hop between frames (samples)
+        private const val N_MELS         = 128
+        private const val TARGET_FRAMES  = 1292
+        private const val F_MIN          = 0.0            // Hz
+        private const val F_MAX          = 11025.0        // Hz  (= TARGET_SR / 2)
+        private const val MAX_SAMPLES    = TARGET_SR * 30 // 30-second preview cap
     }
 
-    /**
-     * Extract mel-spectrogram from audio file
-     *
-     * @param audioUri URI to audio file
-     * @return 2D array [N_MELS x TARGET_FRAMES] normalized to [0, 1]
-     */
-    suspend fun extractMelSpectrogram(audioUri: Uri): Array<FloatArray> = withContext(Dispatchers.IO) {
-        try {
-            Log.d(TAG, "📊 Extracting mel-spectrogram from: $audioUri")
+    // ── Public API ────────────────────────────────────────────────────
 
-            // Extract raw audio samples
-            val audioData = extractAudioSamples(audioUri)
+    suspend fun extractMelSpectrogram(audioUri: Uri): Array<FloatArray> =
+        withContext(Dispatchers.IO) {
+            try {
+                val pcm = decodeToPcm(audioUri)
+                if (pcm.first.isEmpty()) {
+                    Log.w(TAG, "PCM decode returned 0 samples — using fallback")
+                    return@withContext fallback()
+                }
 
-            if (audioData.isEmpty()) {
-                Log.w(TAG, "⚠️ No audio data extracted, using fallback")
-                return@withContext generateFallbackFeatures()
+                val resampled = if (pcm.second != TARGET_SR)
+                    resample(pcm.first, pcm.second, TARGET_SR)
+                else
+                    pcm.first
+
+                val capped = if (resampled.size > MAX_SAMPLES)
+                    resampled.copyOf(MAX_SAMPLES)
+                else
+                    resampled
+
+                Log.d(TAG, "PCM ready: ${capped.size} samples @ $TARGET_SR Hz")
+
+                val mel = melSpectrogram(capped)
+                Log.d(TAG, "Mel-spectrogram: ${mel.size} × ${mel[0].size}")
+                mel
+
+            } catch (e: Exception) {
+                Log.e(TAG, "extractMelSpectrogram failed", e)
+                fallback()
             }
-
-            // Generate mel-spectrogram-like features
-            val melSpec = generateMelSpectrogramFeatures(audioData)
-
-            Log.d(TAG, "✅ Mel-spectrogram generated: ${melSpec.size}x${melSpec[0].size}")
-
-            melSpec
-
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Error extracting mel-spectrogram, using fallback", e)
-            generateFallbackFeatures()
         }
-    }
+
+    // ── Step 1: decode MP3/AAC → raw PCM via MediaCodec ─────────────
 
     /**
-     * Extract raw audio samples from file
+     * Returns Pair(samples: FloatArray, sampleRate: Int).
+     * Mixes down to mono if stereo.
      */
-    private fun extractAudioSamples(audioUri: Uri): FloatArray {
+    private fun decodeToPcm(uri: Uri): Pair<FloatArray, Int> {
         val extractor = MediaExtractor()
-        val samples = mutableListOf<Float>()
+        val allSamples = mutableListOf<Float>()
+        var sampleRate = TARGET_SR
+        var channelCount = 1
 
         try {
-            extractor.setDataSource(context, audioUri, null)
+            extractor.setDataSource(context, uri, null)
 
             // Find audio track
-            var audioTrackIndex = -1
+            var trackIndex = -1
+            var format: MediaFormat? = null
             for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                val fmt = extractor.getTrackFormat(i)
+                val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
                 if (mime.startsWith("audio/")) {
-                    audioTrackIndex = i
-                    Log.d(TAG, "🎵 Found audio track: $mime")
+                    trackIndex = i
+                    format = fmt
                     break
                 }
             }
-
-            if (audioTrackIndex == -1) {
-                Log.w(TAG, "⚠️ No audio track found in file")
-                return floatArrayOf()
+            if (trackIndex < 0 || format == null) {
+                Log.e(TAG, "No audio track found")
+                return Pair(floatArrayOf(), TARGET_SR)
             }
 
-            extractor.selectTrack(audioTrackIndex)
+            extractor.selectTrack(trackIndex)
+            sampleRate   = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val mime     = format.getString(MediaFormat.KEY_MIME)!!
 
-            // Read audio samples
-            val buffer = ByteBuffer.allocate(256 * 1024)
-            val maxSamples = SAMPLE_RATE * MAX_DURATION_SECONDS
-            var samplesRead = 0
+            Log.d(TAG, "Audio: mime=$mime sr=$sampleRate ch=$channelCount")
 
-            while (samplesRead < maxSamples) {
-                val sampleSize = extractor.readSampleData(buffer, 0)
-                if (sampleSize < 0) break // End of stream
+            val codec = MediaCodec.createDecoderByType(mime)
+            codec.configure(format, null, null, 0)
+            codec.start()
 
-                buffer.position(0)
+            val info        = MediaCodec.BufferInfo()
+            var inputDone   = false
+            var outputDone  = false
+            val timeoutUs   = 10_000L
 
-                // Convert bytes to float samples
-                // Assuming 16-bit PCM (most common format)
-                val numSamples = sampleSize / 2
-                for (i in 0 until numSamples) {
-                    if (samplesRead >= maxSamples) break
-
-                    val sample = buffer.short.toFloat() / 32768f // Normalize to [-1, 1]
-                    samples.add(sample)
-                    samplesRead++
+            while (!outputDone) {
+                // Feed compressed data into codec
+                if (!inputDone) {
+                    val inIdx = codec.dequeueInputBuffer(timeoutUs)
+                    if (inIdx >= 0) {
+                        val inBuf = codec.getInputBuffer(inIdx)!!
+                        val size  = extractor.readSampleData(inBuf, 0)
+                        if (size < 0) {
+                            codec.queueInputBuffer(inIdx, 0, 0, 0,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            codec.queueInputBuffer(inIdx, 0, size,
+                                extractor.sampleTime, 0)
+                            extractor.advance()
+                        }
+                    }
                 }
 
-                buffer.clear()
-                extractor.advance()
+                // Drain decoded PCM output
+                val outIdx = codec.dequeueOutputBuffer(info, timeoutUs)
+                if (outIdx >= 0) {
+                    val outBuf = codec.getOutputBuffer(outIdx)!!
+                    outBuf.order(ByteOrder.LITTLE_ENDIAN)
+
+                    // Decoded output is always 16-bit PCM signed
+                    val shortCount = info.size / 2
+                    val shorts = ShortArray(shortCount)
+                    outBuf.asShortBuffer().get(shorts)
+
+                    // Mix to mono and normalise → [-1, 1]
+                    var i = 0
+                    while (i < shortCount) {
+                        var sum = 0f
+                        for (ch in 0 until channelCount) {
+                            sum += shorts[i + ch] / 32768f
+                        }
+                        allSamples.add(sum / channelCount)
+                        i += channelCount
+                        if (allSamples.size >= MAX_SAMPLES) break
+                    }
+
+                    codec.releaseOutputBuffer(outIdx, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0)
+                        outputDone = true
+                } else if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val newFmt   = codec.outputFormat
+                    sampleRate   = newFmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    channelCount = newFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                }
+
+                if (allSamples.size >= MAX_SAMPLES) break
             }
 
-            Log.d(TAG, "📈 Extracted ${samples.size} audio samples")
+            codec.stop()
+            codec.release()
+            Log.d(TAG, "Decoded ${allSamples.size} mono samples")
 
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error extracting audio samples", e)
+            Log.e(TAG, "decodeToPcm failed", e)
         } finally {
             extractor.release()
         }
 
-        return samples.toFloatArray()
+        return Pair(allSamples.toFloatArray(), sampleRate)
     }
 
-    /**
-     * Generate mel-spectrogram-like features from audio samples
-     *
-     * This is a simplified version that:
-     * 1. Divides audio into frames
-     * 2. Calculates energy in different frequency bands (mel bins)
-     * 3. Applies log scaling
-     * 4. Normalizes to [0, 1]
-     */
-    private fun generateMelSpectrogramFeatures(audioData: FloatArray): Array<FloatArray> {
-        val melSpec = Array(N_MELS) { FloatArray(TARGET_FRAMES) }
+    // ── Step 2: linear resample ───────────────────────────────────────
 
-        val windowSize = 2048
-        val hopSize = 512
+    private fun resample(input: FloatArray, fromHz: Int, toHz: Int): FloatArray {
+        if (fromHz == toHz) return input
+        val ratio  = fromHz.toDouble() / toHz.toDouble()
+        val outLen = (input.size / ratio).toInt()
+        return FloatArray(outLen) { i ->
+            val srcPos = i * ratio
+            val lo     = srcPos.toInt().coerceIn(0, input.size - 1)
+            val hi     = (lo + 1).coerceIn(0, input.size - 1)
+            val frac   = (srcPos - lo).toFloat()
+            input[lo] * (1f - frac) + input[hi] * frac
+        }
+    }
 
-        var frameIdx = 0
-        var sampleIdx = 0
+    // ── Step 3 + 4: STFT → power spectrum → mel filterbank ──────────
 
-        while (sampleIdx < audioData.size - windowSize && frameIdx < TARGET_FRAMES) {
-            // Extract frame
-            val frame = audioData.sliceArray(sampleIdx until min(sampleIdx + windowSize, audioData.size))
+    private fun melSpectrogram(samples: FloatArray): Array<FloatArray> {
+        val hannWindow = FloatArray(N_FFT) { i ->
+            (0.5 * (1.0 - cos(2.0 * PI * i / (N_FFT - 1)))).toFloat()
+        }
 
-            // Apply Hann window to reduce spectral leakage
-            val windowedFrame = applyHannWindow(frame)
+        val melFilters = buildMelFilterbank()
+        // Raw power spectrogram — filled per frame below
+        val powerSpec  = Array(N_MELS) { FloatArray(TARGET_FRAMES) { 0f } }
 
-            // Calculate energy in different frequency bands (simplified mel bins)
-            for (melBin in 0 until N_MELS) {
-                val energy = calculateBandEnergy(windowedFrame, melBin, N_MELS)
-                melSpec[melBin][frameIdx] = energy
+        for (frame in 0 until TARGET_FRAMES) {
+            val start = frame * HOP_LENGTH
+
+            // Build windowed frame (zero-pad if past end of signal)
+            val windowed = FloatArray(N_FFT) { i ->
+                val idx = start + i
+                if (idx < samples.size) samples[idx] * hannWindow[i] else 0f
             }
 
-            sampleIdx += hopSize
-            frameIdx++
-        }
+            // Real FFT → power spectrum (N_FFT/2+1 bins)
+            val power = rfftPower(windowed)
 
-        // Pad remaining frames with zeros if needed
-        while (frameIdx < TARGET_FRAMES) {
-            for (melBin in 0 until N_MELS) {
-                melSpec[melBin][frameIdx] = -10f // Low energy (will be normalized later)
+            // Apply mel filterbank → linear power per mel bin
+            for (m in 0 until N_MELS) {
+                var energy = 0f
+                for (k in melFilters[m].indices) {
+                    energy += melFilters[m][k] * power[k]
+                }
+                powerSpec[m][frame] = max(energy, 1e-10f)
             }
-            frameIdx++
         }
 
-        // Normalize to [0, 1]
-        normalizeInPlace(melSpec)
+        // ── librosa.power_to_db(mel, ref=np.max) ─────────────────────
+        // ref = global max of the linear power spectrogram
+        // dB  = 10 * log10(power / ref)   clamped at top - 80 dB
+        var refMax = 1e-10f
+        for (m in 0 until N_MELS) for (t in 0 until TARGET_FRAMES) {
+            if (powerSpec[m][t] > refMax) refMax = powerSpec[m][t]
+        }
+        val result = Array(N_MELS) { m ->
+            FloatArray(TARGET_FRAMES) { t ->
+                val db = 10f * log10(powerSpec[m][t] / refMax)
+                max(db, -80f)   // librosa top_db=80 default
+            }
+        }
 
-        return melSpec
+        // ── min-max normalise to [0, 1] (matches training pipeline) ──
+        var minV = Float.MAX_VALUE
+        var maxV = -Float.MAX_VALUE
+        for (m in 0 until N_MELS) for (t in 0 until TARGET_FRAMES) {
+            if (result[m][t] < minV) minV = result[m][t]
+            if (result[m][t] > maxV) maxV = result[m][t]
+        }
+        val range = maxV - minV
+        if (range > 0f) {
+            for (m in 0 until N_MELS) for (t in 0 until TARGET_FRAMES) {
+                result[m][t] = (result[m][t] - minV) / range
+            }
+        }
+
+        return result
     }
 
+    // ── Real FFT (Cooley-Tukey, radix-2) → power spectrum ────────────
+
     /**
-     * Apply Hann window to reduce spectral leakage
+     * Returns power spectrum of length N_FFT/2+1.
+     * Input must be length N_FFT (power of 2).
      */
-    private fun applyHannWindow(frame: FloatArray): FloatArray {
-        val n = frame.size
-        return FloatArray(n) { i ->
-            val window = 0.5f * (1 - cos(2 * PI.toFloat() * i / (n - 1)))
-            frame[i] * window
+    private fun rfftPower(x: FloatArray): FloatArray {
+        val n   = x.size   // 2048
+        val re  = DoubleArray(n) { x[it].toDouble() }
+        val im  = DoubleArray(n)
+
+        // Bit-reversal permutation
+        var j = 0
+        for (i in 1 until n) {
+            var bit = n shr 1
+            while (j and bit != 0) { j = j xor bit; bit = bit shr 1 }
+            j = j xor bit
+            if (i < j) { re[i] = re[j].also { re[j] = re[i] }
+                im[i] = im[j].also { im[j] = im[i] } }
+        }
+
+        // Cooley-Tukey iterative FFT
+        var len = 2
+        while (len <= n) {
+            val ang = 2.0 * PI / len
+            val wRe = cos(ang); val wIm = sin(ang)
+            var i = 0
+            while (i < n) {
+                var curRe = 1.0; var curIm = 0.0
+                for (k in 0 until len / 2) {
+                    val uRe = re[i + k]
+                    val uIm = im[i + k]
+                    val vRe = re[i + k + len / 2] * curRe - im[i + k + len / 2] * curIm
+                    val vIm = re[i + k + len / 2] * curIm + im[i + k + len / 2] * curRe
+                    re[i + k]           = uRe + vRe
+                    im[i + k]           = uIm + vIm
+                    re[i + k + len / 2] = uRe - vRe
+                    im[i + k + len / 2] = uIm - vIm
+                    val tmpRe = curRe * wRe - curIm * wIm
+                    curIm     = curRe * wIm + curIm * wRe
+                    curRe     = tmpRe
+                }
+                i += len
+            }
+            len = len shl 1
+        }
+
+        // Power spectrum for positive frequencies only (bins 0 … N_FFT/2)
+        val half = n / 2 + 1
+        return FloatArray(half) { k ->
+            (re[k] * re[k] + im[k] * im[k]).toFloat()
         }
     }
 
-    /**
-     * Calculate energy in a frequency band (simplified mel bin)
-     *
-     * This divides the frequency range into mel-like bins and calculates
-     * the energy (sum of squared samples) in each bin.
-     */
-    private fun calculateBandEnergy(frame: FloatArray, melBin: Int, totalBins: Int): Float {
-        // Divide frequency range into mel-like bins
-        // In a real implementation, you'd use proper mel filterbank
-        val binSize = frame.size / totalBins
-        val startIdx = melBin * binSize
-        val endIdx = min(startIdx + binSize, frame.size)
+    // ── Step 4 helper: build mel filterbank ──────────────────────────
 
-        var energy = 0f
-        for (i in startIdx until endIdx) {
-            energy += frame[i] * frame[i] // Power = amplitude^2
+    /**
+     * Returns [N_MELS × (N_FFT/2+1)] triangular mel filter weights.
+     * Matches librosa.filters.mel(sr=22050, n_fft=2048, n_mels=128).
+     */
+    private fun buildMelFilterbank(): Array<FloatArray> {
+        val numBins = N_FFT / 2 + 1   // 1025
+
+        fun hzToMel(hz: Double) = 2595.0 * log10(1.0 + hz / 700.0)
+        fun melToHz(mel: Double) = 700.0 * (10.0.pow(mel / 2595.0) - 1.0)
+
+        val melMin  = hzToMel(F_MIN)
+        val melMax  = hzToMel(F_MAX)
+
+        // N_MELS + 2 equally-spaced mel points
+        val melPoints = DoubleArray(N_MELS + 2) { i ->
+            melMin + i * (melMax - melMin) / (N_MELS + 1)
+        }
+        // Convert back to Hz, then to FFT bin index
+        val binFreqs = DoubleArray(numBins) { k -> k.toDouble() * TARGET_SR / N_FFT }
+        val fftBins  = DoubleArray(N_MELS + 2) { i ->
+            val hz = melToHz(melPoints[i])
+            // Find nearest FFT bin
+            binFreqs.indexOfFirst { it >= hz }.let { idx ->
+                if (idx < 0) (numBins - 1).toDouble() else idx.toDouble()
+            }
         }
 
-        // Average energy
-        energy /= (endIdx - startIdx)
-
-        // Apply log scaling (mel-like)
-        // Add small epsilon to avoid log(0)
-        return ln(max(energy, 1e-10f))
-    }
-
-    /**
-     * Normalize mel-spectrogram to [0, 1] range in-place
-     */
-    private fun normalizeInPlace(melSpec: Array<FloatArray>) {
-        var minVal = Float.MAX_VALUE
-        var maxVal = Float.MIN_VALUE
-
-        // Find min and max
-        for (i in melSpec.indices) {
-            for (j in melSpec[i].indices) {
-                val value = melSpec[i][j]
-                if (value.isFinite()) { // Skip NaN and Inf
-                    minVal = min(minVal, value)
-                    maxVal = max(maxVal, value)
+        return Array(N_MELS) { m ->
+            FloatArray(numBins) { k ->
+                val lower  = fftBins[m]
+                val center = fftBins[m + 1]
+                val upper  = fftBins[m + 2]
+                when {
+                    k < lower  || k > upper -> 0f
+                    k < center -> ((k - lower) / (center - lower)).toFloat()
+                    else       -> ((upper - k) / (upper - center)).toFloat()
                 }
             }
         }
-
-        val range = maxVal - minVal
-
-        // Normalize
-        if (range > 0 && range.isFinite()) {
-            for (i in melSpec.indices) {
-                for (j in melSpec[i].indices) {
-                    val value = melSpec[i][j]
-                    melSpec[i][j] = if (value.isFinite()) {
-                        (value - minVal) / range
-                    } else {
-                        0f // Replace NaN/Inf with 0
-                    }
-                }
-            }
-        } else {
-            // If all values are the same or invalid, fill with 0.5
-            Log.w(TAG, "⚠️ Invalid range for normalization, using neutral values")
-            for (i in melSpec.indices) {
-                for (j in melSpec[i].indices) {
-                    melSpec[i][j] = 0.5f
-                }
-            }
-        }
     }
 
-    /**
-     * Generate fallback features when audio extraction fails
-     *
-     * This generates smooth random features that are better than zeros
-     * and can still produce reasonable (though not accurate) predictions.
-     */
-    private fun generateFallbackFeatures(): Array<FloatArray> {
-        Log.w(TAG, "⚠️ Using fallback features - predictions will be less accurate")
+    // ── Fallback ──────────────────────────────────────────────────────
 
-        val melSpec = Array(N_MELS) { FloatArray(TARGET_FRAMES) }
-
-        // Generate smooth random features
-        for (i in 0 until N_MELS) {
-            var value = Math.random().toFloat() * 0.5f + 0.25f // Start in middle range
-
-            for (j in 0 until TARGET_FRAMES) {
-                // Add small random variation but keep smooth
-                value += (Math.random().toFloat() - 0.5f) * 0.05f
-                value = max(0f, min(1f, value)) // Clamp to [0, 1]
-                melSpec[i][j] = value
-            }
-        }
-
-        return melSpec
-    }
-
-    /**
-     * Validate that the mel-spectrogram has the correct shape
-     */
-    fun validateMelSpectrogram(melSpec: Array<FloatArray>): Boolean {
-        if (melSpec.size != N_MELS) {
-            Log.e(TAG, "❌ Invalid mel-spectrogram: expected $N_MELS mel bins, got ${melSpec.size}")
-            return false
-        }
-
-        if (melSpec[0].size != TARGET_FRAMES) {
-            Log.e(TAG, "❌ Invalid mel-spectrogram: expected $TARGET_FRAMES frames, got ${melSpec[0].size}")
-            return false
-        }
-
-        // Check for NaN or Inf values
-        for (i in melSpec.indices) {
-            for (j in melSpec[i].indices) {
-                if (!melSpec[i][j].isFinite()) {
-                    Log.e(TAG, "❌ Invalid value at [$i][$j]: ${melSpec[i][j]}")
-                    return false
-                }
-            }
-        }
-
-        return true
+    private fun fallback(): Array<FloatArray> {
+        Log.w(TAG, "Using fallback spectrogram — predictions will be inaccurate")
+        return Array(N_MELS) { FloatArray(TARGET_FRAMES) { 0.5f } }
     }
 }

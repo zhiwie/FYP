@@ -187,7 +187,7 @@ fun SpotifyConnectionScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Full song playback requires Spotify Premium. Free users can still receive song recommendations played via YouTube.",
+                                text = "Full song playback requires Spotify Premium. Free users can still receive song recommendations with 30-second Deezer previews.",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
