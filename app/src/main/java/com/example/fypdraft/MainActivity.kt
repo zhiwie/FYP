@@ -27,6 +27,7 @@ import com.example.fypdraft.viewmodel.MusicPlayerViewModel
 import com.example.fypdraft.viewmodel.SpotifyViewModel
 import com.example.fypdraft.data.repository.SpotifyMusicRepository
 import com.example.fypdraft.data.repository.SpotifyRepository
+import com.example.fypdraft.ml.MusicRecommendationEngine
 import com.example.fypdraft.model.PetRepository
 import com.example.fypdraft.ui.theme.FYPDraftTheme
 import com.example.fypdraft.ui.theme.AppThemeState
@@ -68,6 +69,8 @@ class MainActivity : ComponentActivity() {
     val spotifyRepository: SpotifyRepository by lazy { SpotifyRepository.getInstance(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.e("TEST", "Attempting to create engine...")
+        val engine = MusicRecommendationEngine(application)
         super.onCreate(savedInstanceState)
         try {
             musicPlayerViewModel = ViewModelProvider(
